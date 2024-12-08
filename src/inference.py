@@ -5,6 +5,7 @@ import json
 import os
 import pstats
 import re
+import time
 from pathlib import Path
 from pstats import SortKey
 
@@ -107,10 +108,15 @@ def main():
     debug = PerformanceMonitor(args.debug)
 
     out_config_file = Path(args.output_file).parent / "config.yaml"
+    # Save results to output file
+    out_path = Path(args.output_file)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
     if yaml_file:
         yaml_args = YamlArgsLoader(out_config_file)
         yaml_args.save_args(args)
 
+    s_time = time.time()
     # raise ValueError("This is a test error")
     for ids, batch in tqdm(inference_loader):
         with debug:
@@ -146,19 +152,20 @@ def main():
             debug.set_params(**{"assistant_reply": sum(res_len) / len(res_len)})
             debug.stamp()
             debug.log_performance(log_per=20)
-
         # with cProfile.Profile() as pr:
         # stream = io.StringIO()
         # stats = pstats.Stats(pr, stream=stream)
         # stats.sort_stats("time")  # Sort by time
         # stats.print_stats(10)  # Display top 10 results
         # print(stream.getvalue())
-
-    # Save results to output file
-    out_path = Path(args.output_file)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+        e_time = time.time()
+        if (e_time - s_time) // 60 > 10:
+            ## Save the results every 10 minutes
+            with open(out_path, "w") as json_file:
+                json.dump(data, json_file)
+            s_time = time.time()
     with open(out_path, "w") as json_file:
-        json.dump(data, json_file, indent=4)
+        json.dump(data, json_file)
 
 
 if __name__ == "__main__":

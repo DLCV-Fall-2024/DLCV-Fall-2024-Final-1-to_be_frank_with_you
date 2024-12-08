@@ -197,3 +197,7 @@ role_mapping = {"user": "USER", "assistant": "ASSISTANT"}
 
 def apply_chat_template(conversation):
     return "USER: " + conversation + "ASSISTANT:"
+
+
+if __name__ == "__main__":
+    preprocess_dataset()
