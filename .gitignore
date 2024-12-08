@@ -10,3 +10,4 @@ val/
 !few_shot/**/*.json
 data/
 outputs/
+llama-3-8b/

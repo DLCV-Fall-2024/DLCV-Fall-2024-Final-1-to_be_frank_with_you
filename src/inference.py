@@ -105,8 +105,9 @@ def main():
         generation_config = GenerationConfig()
     print("Generation Config:")
     generation_config_diff = generation_config.to_diff_dict()
+    sorted(generation_config_diff.keys())
     if len(generation_config_diff.keys()) > 0:
-        pretty_print(generation_config.to_diff_dict())
+        pretty_print(generation_config_diff)
     print()
     # Perform inference
     data = {}

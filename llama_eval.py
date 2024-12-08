@@ -3,12 +3,14 @@ import json
 import os
 import random
 import string
+import time
 from collections import defaultdict
 
 import numpy as np
 import torch
 import transformers
 from datasets import load_dataset
+from torch.utils.data import DataLoader
 
 from scorer import Scorer
 
@@ -70,23 +72,30 @@ if __name__ == "__main__":
     # Load model
     pipeline = transformers.pipeline(
         "text-generation",
-        model=args.model_id,
+        model="llama-3-8b",
         model_kwargs={"torch_dtype": torch.bfloat16},
         device_map="cuda",
         temperature=args.temperature,
     )
     # Load data
-    reference = load_dataset(args.dataset_name, split=args.split, streaming=True)
+    reference = load_dataset(args.dataset_name, split=args.split)
     prediction = json.load(open(args.prediction, "r"))
     NLP_HYPOTHESIS = {key: [value.strip()] for key, value in prediction.items()}
     NLP_REFERENCE = {}
 
     result = defaultdict(list)
-    # save = {}
-    # fail_cases = []
-    for data in reference:
+    save = {}
+    fail_cases = []
+    from tqdm import tqdm
+
+    time_limit = 10
+    s_time = time.time()
+    for data in tqdm(reference):
         sample_id = data["id"]
         score = 0
+        if (time.time() - s_time) // 60 > time_limit:
+            print("Time limit reached.")
+            break
 
         if sample_id not in prediction:
             continue
@@ -95,24 +104,33 @@ if __name__ == "__main__":
         message["reference"] = data["conversations"][1]["value"]
         sample_type = (sample_id.split("_")[1]).lower()
         messages = formulate_template(args.few_shot, message, sample_type)
+        pipeline.tokenizer.chat_template = (
+            "{% for message in messages %}"
+            "{% if message['role'] == 'user' %}{{ ' ' }}{% endif %}"
+            "{{ message['content'] }}"
+            "{% if not loop.last %}{{ '  ' }}{% endif %}"
+            "{% endfor %}"
+            "{{ eos_token }}"
+        )
+        prompt = pipeline.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+
         for max_tokens in [args.max_output_tokens, 1024]:
             try:
                 outputs = pipeline(
-                    messages,
+                    prompt,
                     max_new_tokens=max_tokens,
                 )
-                score = int(
-                    outputs[0]["generated_text"][-1]["content"]
-                    .split("[[")[-1]
-                    .split("]")[0]
-                )
+                score = int(outputs[0]["generated_text"].split("[[")[-1].split("]]")[0])
                 break
-            except:
+            except Exception as e:
+                print(e)
                 continue
 
-        # if score == 0:
-        #     print(f"Missing score for sample: {sample_id}")
-        #     fail_cases.append(sample_id)
+        if score == 0:
+            print(f"Missing score for sample: {sample_id}")
+            fail_cases.append(sample_id)
         result[sample_type].append(score)
 
         # save[sample_id] = {
@@ -123,6 +141,7 @@ if __name__ == "__main__":
         #     json.dump(save, f, indent=4)
         NLP_REFERENCE[sample_id] = [data["conversations"][1]["value"]]
 
+    NLP_HYPOTHESIS = {key: NLP_HYPOTHESIS[key] for key in NLP_REFERENCE}
     coco_eval = Scorer(NLP_HYPOTHESIS, NLP_REFERENCE)
     total_scores = coco_eval.evaluate()
 
@@ -134,7 +153,7 @@ if __name__ == "__main__":
         print(f"{sample_type.capitalize()} score: {score:.3f}")
         total.append(score)
     print(f"LLM judges: {np.mean(total):.3f}")
-    # print("Number of fail cases: ", len(fail_cases))
+    print("Number of fail cases: ", len(fail_cases))
 
     # NLP metric
     for key, value in total_scores.items():
