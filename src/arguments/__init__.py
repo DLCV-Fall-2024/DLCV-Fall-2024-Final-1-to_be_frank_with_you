@@ -150,15 +150,17 @@ class YamlArgsLoader:
                 setattr(args, key, value)
         return args
 
-    def save_args(self, args: Namespace):
+    def save_args(self, args: Namespace, exclude: List[str] = []):
         """
         Save the current arguments to the YAML file.
         :param args: argparse.Namespace object with already parsed arguments.
         """
 
-        args = vars(args)  # copy the args to avoid modifying the original
         origin = vars(args)
-
+        for key in exclude:
+            if key in origin:
+                del origin[key]
+        args = Namespace(**origin)
         config = {}
 
         for params_class in self.params_classes:

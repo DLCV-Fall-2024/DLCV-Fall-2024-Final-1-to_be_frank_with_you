@@ -28,17 +28,17 @@ def pretty_print(elem, indent=0, after_key=False, max_depth=5, expand_tensors=Fa
         for v in elem:
             pretty_print(v, indent + 1)
         print(prefix + "]")
-
-    printable_text = ""
-    if isinstance(elem, (torch.Tensor, np.ndarray)) and not expand_tensors:
-        printable_text = f"{type(elem)}: {elem.shape}, {elem.dtype}"
     else:
-        printable_text = repr(elem)
+        printable_text = ""
+        if isinstance(elem, (torch.Tensor, np.ndarray)) and not expand_tensors:
+            printable_text = f"{type(elem)}: {elem.shape}, {elem.dtype}"
+        else:
+            printable_text = repr(elem)
 
-    if after_key:
-        print(printable_text)
-    else:
-        print(prefix + printable_text)
+        if after_key:
+            print(printable_text)
+        else:
+            print(prefix + printable_text)
 
 
 __PRINT_ONCE__ = set()

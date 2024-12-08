@@ -1,4 +1,2 @@
-config_file: configs/inference.yaml
 max_new_tokens: 1024
-output_file: outputs/test_pred.json
 use_regex: false

@@ -99,22 +99,35 @@ def main():
         num_workers=args.num_workers,
     )
 
-    generation_config = GenerationConfig.from_dict(args.__dict__)
+    if "generation_config" in vars(args):
+        generation_config = GenerationConfig.from_dict(args.generation_config)
+    else:
+        generation_config = GenerationConfig()
     print("Generation Config:")
-    pretty_print(generation_config.__dict__)
+    generation_config_diff = generation_config.to_diff_dict()
+    if len(generation_config_diff.keys()) > 0:
+        pretty_print(generation_config.to_diff_dict())
     print()
     # Perform inference
     data = {}
     debug = PerformanceMonitor(args.debug)
 
-    out_config_file = Path(args.output_file).parent / "config.yaml"
-    # Save results to output file
     out_path = Path(args.output_file)
+    if out_path.is_file():
+        out_path = Path(args.output_file)
+    else:
+        timestamp = time.strftime("%m%d%H%M%S")
+        out_path = (
+            out_path / f"{timestamp}-{args.dataset_path.split("/")[-1]}" / "pred.json"
+        )
+    out_config_file = out_path.parent / "config.yaml"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     if yaml_file:
         yaml_args = YamlArgsLoader(out_config_file)
-        yaml_args.save_args(args)
+        if len(generation_config_diff.keys()) > 0:
+            setattr(args, "generation_config", generation_config_diff)
+        yaml_args.save_args(args, exclude=["config_file", "output_file"])
 
     s_time = time.time()
     # raise ValueError("This is a test error")
@@ -131,7 +144,7 @@ def main():
                 **inputs,
                 max_new_tokens=args.max_new_tokens,
                 do_sample=False,
-                generation_config=generation_config
+                generation_config=generation_config,
             )
 
             debug.stamp()
