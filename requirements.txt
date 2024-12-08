@@ -4,3 +4,10 @@ datasets
 huggingface_hub
 transformers==4.46.3
 accelerate==0.26.0
+sam2
+visdom
+scikit-learn
+torchvision
+# For Semantic-SAM
+git+https://github.com/MaureenZOU/detectron2-xyz.git
+git+https://github.com/cocodataset/panopticapi.git
