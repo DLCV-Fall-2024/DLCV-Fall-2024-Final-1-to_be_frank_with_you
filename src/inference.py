@@ -106,7 +106,7 @@ def main():
     data = {}
     debug = PerformanceMonitor(args.debug)
 
-    out_config_file = Path(args.output_file).parent / "config.json"
+    out_config_file = Path(args.output_file).parent / "config.yaml"
     if yaml_file:
         yaml_args = YamlArgsLoader(out_config_file)
         yaml_args.save_args(args)
