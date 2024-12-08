@@ -67,6 +67,8 @@ class ModelParams(ParamGroup):
         self.__yaml_name__ = "Model".upper()
         self.model_id = "llava-hf/llava-1.5-7b-hf"
         self.device = "cuda"
+        self.patch_size = 14
+        self.vision_feature_select_strategy = "full"  # "default" or "full"
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -97,7 +99,8 @@ class OptimizationParams(ParamGroup):
 
     def __init__(self, parser=None):
         self.__yaml_name__ = "Optimization".upper()
-        self.iterations = 30_000
+        self.epochs = 100
+        self.lr = 3e-5
         self.optimizer_type = "default"
         super().__init__(parser, "Optimization Parameters")
 
@@ -156,7 +159,7 @@ class YamlArgsLoader:
         :param args: argparse.Namespace object with already parsed arguments.
         """
 
-        origin = vars(args)
+        origin = {**vars(args)}
         for key in exclude:
             if key in origin:
                 del origin[key]

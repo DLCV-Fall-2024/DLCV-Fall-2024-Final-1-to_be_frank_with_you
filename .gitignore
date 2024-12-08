@@ -11,3 +11,5 @@ val/
 data/
 outputs/
 llama-3-8b/
+runs/
+wandb/

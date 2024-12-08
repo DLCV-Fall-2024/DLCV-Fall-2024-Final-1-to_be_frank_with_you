@@ -24,7 +24,7 @@ from transformers import (
 
 from src.arguments import DatasetParams, ModelParams, PipelineParams, YamlArgsLoader
 from utils.dataset import DiscDataset
-from utils.log import PerformanceMonitor, pretty_print
+from utils.log import PerformanceMonitor, Timer, pretty_print
 
 
 def arg_parser():
@@ -75,24 +75,28 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # TODO: modify this for a more general use case, e.g. load our own model
+    ################## Below should be wrap in the class ######################
+    # TODO: (yck) modify this for a more general use case, e.g. load our own model
     model = LlavaForConditionalGeneration.from_pretrained(
         args.model_id,
         torch_dtype=torch.float16,
     ).to(device)
     processor = LlavaProcessor.from_pretrained(args.model_id)
-    processor.patch_size = 14
-    processor.vision_feature_select_strategy = "default"
+    processor.patch_size = args.patch_size
+    processor.vision_feature_select_strategy = args.vision_feature_select_strategy
 
     transform = lambda img, prompt: processor(
         img,
         text=prompt,
-        return_tensors="pt",
+        return_tensors="pt",  # return as pytorch tensors
         padding=True,
-        do_rescale=False,
+        do_rescale=False,  # since we already rescale color range to [0, 1] when loading dataset
     )
+    ###########################################################################
 
-    dataset = DiscDataset(args.dataset_path, train=False)  # , transform=transform)
+    ### We don't transform the inputs in the dataset since we don't know the prompt size in advance (fix-sized padding introduces overhead)
+    ### Instead, we will transform the inputs in the inference loop.
+    dataset = DiscDataset(args.dataset_path, train=False)
     inference_loader = DataLoader(
         dataset,
         batch_size=args.batch_size,  # max for 20GB GPU
@@ -103,6 +107,7 @@ def main():
         generation_config = GenerationConfig.from_dict(args.generation_config)
     else:
         generation_config = GenerationConfig()
+
     print("Generation Config:")
     generation_config_diff = generation_config.to_diff_dict()
     sorted(generation_config_diff.keys())
@@ -110,17 +115,15 @@ def main():
         pretty_print(generation_config_diff)
     print()
     # Perform inference
-    data = {}
-    debug = PerformanceMonitor(args.debug)
 
     out_path = Path(args.output_file)
+
+    timestamp = time.strftime("%m%d%H%M%S")
+    dataset_type = args.dataset_path.split("/")[-1]
     if out_path.is_file():
         out_path = Path(args.output_file)
     else:
-        timestamp = time.strftime("%m%d%H%M%S")
-        out_path = (
-            out_path / f"{timestamp}-{args.dataset_path.split("/")[-1]}" / "pred.json"
-        )
+        out_path = out_path / f"{timestamp}-{dataset_type}" / "pred.json"
     out_config_file = out_path.parent / "config.yaml"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -130,16 +133,16 @@ def main():
             setattr(args, "generation_config", generation_config_diff)
         yaml_args.save_args(args, exclude=["config_file", "output_file"])
 
-    s_time = time.time()
-    # raise ValueError("This is a test error")
+    data = {}
+    timer = Timer(10)  # 10 minutes
+    DEBUG = PerformanceMonitor(args.debug)
     for ids, batch in tqdm(inference_loader):
-        with debug:
-            # inputs = batch.to(device, torch.float16)
+        with DEBUG:
             inputs = transform(batch["image"], prompt=batch["prompt"]).to(
                 device, torch.float16
             )
-            debug.stamp()
-            debug.set_params(**{"ids": ids})
+            DEBUG.stamp()
+            DEBUG.set_params(**{"ids": ids})
 
             output = model.generate(
                 **inputs,
@@ -148,9 +151,9 @@ def main():
                 generation_config=generation_config,
             )
 
-            debug.stamp()
+            DEBUG.stamp()
             text = processor.batch_decode(output, skip_special_tokens=True)
-            debug.stamp()
+            DEBUG.stamp()
 
             res_len = []
             for idx, item in enumerate(ids):
@@ -163,21 +166,14 @@ def main():
                 data[item] = assistant_reply
                 res_len.append(len(assistant_reply))
 
-            debug.set_params(**{"assistant_reply": sum(res_len) / len(res_len)})
-            debug.stamp()
-            debug.log_performance(log_per=20)
-        # with cProfile.Profile() as pr:
-        # stream = io.StringIO()
-        # stats = pstats.Stats(pr, stream=stream)
-        # stats.sort_stats("time")  # Sort by time
-        # stats.print_stats(10)  # Display top 10 results
-        # print(stream.getvalue())
-        e_time = time.time()
-        if (e_time - s_time) // 60 > 10:
+            DEBUG.set_params(**{"assistant_reply": sum(res_len) / len(res_len)})
+            DEBUG.stamp()
+            DEBUG.log_performance(log_per=20)
+        if timer.timesup():
             ## Save the results every 10 minutes
+            timer.restart()
             with open(out_path, "w") as json_file:
                 json.dump(data, json_file)
-            s_time = time.time()
     with open(out_path, "w") as json_file:
         json.dump(data, json_file)
 

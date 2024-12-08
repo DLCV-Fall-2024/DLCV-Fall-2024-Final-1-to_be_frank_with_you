@@ -71,7 +71,13 @@ class DiscDataset(Dataset):
             }
 
         if self.is_train:
-            self.cache[idx] = (item["id"], inputs, item["gt"])
+            self.cache[idx] = (
+                item["id"],
+                {
+                    "image": inputs["image"],
+                    "prompt": f"{inputs['prompt']} {item['gt']}",
+                },
+            )
         else:
             self.cache[idx] = (item["id"], inputs)
         return self.cache[idx]

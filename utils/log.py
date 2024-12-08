@@ -5,6 +5,26 @@ from collections import defaultdict, deque
 import numpy as np
 import torch
 
+try:
+    import wandb
+
+    __WANDB_AVAILABLE__ = True
+except ImportError:
+    __WANDB_AVAILABLE__ = False
+
+
+def init_wandb(project_name, run_name, config, **kwargs):
+    if not __WANDB_AVAILABLE__:
+        return
+    wandb.init(project=project_name, name=run_name, config=config, **kwargs)
+    wandb.config.update(config)
+
+
+def init_logger(verbose=True):
+    if not __WANDB_AVAILABLE__:
+        return print if verbose else lambda *args, **kwargs: None
+    return wandb.log
+
 
 def pretty_print(elem, indent=0, after_key=False, max_depth=5, expand_tensors=False):
     prefix = "  " * indent
@@ -60,6 +80,45 @@ def get_caller_info(depth=2):
     return f"{caller_info.filename}:{caller_info.lineno}"
 
 
+class Timer:
+    def __init__(self, limit=0):
+        self.limit = limit
+        self.start_time = None
+        self.end_time = None
+        self.start()
+
+    def start(self):
+        self.start_time = time.time()
+
+    def restart(self, limit=None):
+        self.start()
+        self.end_time = None
+        if limit is not None:
+            self.limit = limit
+
+    def stop(self):
+        self.end_time = time.time()
+
+    def elapsed(self):
+        if self.start_time is None:
+            raise RuntimeError("Timer has not been started.")
+        if self.end_time is None:
+            return time.time() - self.start_time
+        return self.end_time - self.start_time
+
+    def timesup(self):
+        if self.limit is None or self.limit <= 0:
+            return False
+        return self.elapsed() > self.limit
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop()
+
+
 class PerformanceMonitor:
     def __init__(self, debug=True, ema_decay=0.9, threshold=1.2, horizon_size=10):
         """
@@ -78,6 +137,8 @@ class PerformanceMonitor:
         )  # Separate history for each context.
         self.ema = defaultdict(lambda: None)  # Track EMA for each context key
         self.start_time = None  # To record when entering context.
+
+        self.prev_stamp = None  # Store the previous time stamp
         self.stamps = defaultdict(
             lambda: deque(maxlen=self.horizon_size)
         )  # Store time stamps from `stamp`
@@ -146,16 +207,21 @@ class PerformanceMonitor:
         # Get the calling context (the function directly calling `stamp`)
         key = get_caller_info()
 
-        if self.start_time:
-            elapsed_time = time.time() - self.start_time
-            self.stamps[f"{self.context_key}-{key}"].append(
-                elapsed_time
-            )  # Store time-stamp into the corresponding history
-            return elapsed_time
-        else:
+        if self.start_time is None:
             raise RuntimeError(
                 "Context has not started. Call within an active context."
             )
+
+        now = time.time()
+        elapsed_time = now - self.start_time
+        duration_to_prev = (
+            now - self.prev_stamp if self.prev_stamp is not None else elapsed_time
+        )
+        self.prev_stamp = now
+        self.stamps[f"{self.context_key}-{key}"].append(
+            (elapsed_time, duration_to_prev)
+        )  # Store time-stamp into the corresponding history
+        return elapsed_time
 
     def __enter__(self):
         """
