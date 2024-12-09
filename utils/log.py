@@ -13,10 +13,12 @@ except ImportError:
     __WANDB_AVAILABLE__ = False
 
 
-def init_wandb(project_name, run_name, config, **kwargs):
+def init_wandb(project_name, run_name, config, log_dir=None, **kwargs):
     if not __WANDB_AVAILABLE__:
         return
-    wandb.init(project=project_name, name=run_name, config=config, **kwargs)
+    wandb.init(
+        project=project_name, name=run_name, config=config, dir=str(log_dir), **kwargs
+    )
     wandb.config.update(config)
 
 

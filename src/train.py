@@ -8,14 +8,17 @@ import torch
 from pytorch_lightning import seed_everything
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from transformers import (GenerationConfig, LlavaForConditionalGeneration,
-                          LlavaProcessor)
+from transformers import GenerationConfig, LlavaForConditionalGeneration, LlavaProcessor
 
-from src.arguments import (DatasetParams, ModelParams, OptimizationParams,
-                           PipelineParams, YamlArgsLoader)
+from src.arguments import (
+    DatasetParams,
+    ModelParams,
+    OptimizationParams,
+    PipelineParams,
+    YamlArgsLoader,
+)
 from utils.dataset import DiscDataset
-from utils.log import (PerformanceMonitor, Timer, init_logger, init_wandb,
-                       pretty_print)
+from utils.log import PerformanceMonitor, Timer, init_logger, init_wandb, pretty_print
 
 
 def arg_parser():
@@ -46,7 +49,7 @@ def arg_parser():
 
 def main():
     args = arg_parser()
-
+    addition_config = {}
     yaml_file = Path(args.config_file)
     if yaml_file.exists():
         yaml_args = YamlArgsLoader(yaml_file)
@@ -59,21 +62,25 @@ def main():
     from peft import LoraConfig, get_peft_model
     from transformers import Trainer, TrainingArguments
 
-    lora_config = LoraConfig(
-        r=16,
-        lora_alpha=32,
-        target_modules=["q_proj", "v_proj"],
-        lora_dropout=0.1,
-        bias="none",
-        task_type="CAUSAL_LM",
-    )
-
     model = LlavaForConditionalGeneration.from_pretrained(
         args.model_id,
         torch_dtype=torch.bfloat16,
     )
 
+    ## enable gradient checkpointing for memory efficiency
+    use_cache = True
+    if getattr(args, "gradient_checkpointing", True):
+        model.gradient_checkpointing_enable()
+        model.enable_input_require_grads()
+        use_cache = False
+    ## finetune only language model
+    lora_config = LoraConfig(**args.lora_config)
     model = get_peft_model(model, lora_config)
+    trainable_params, all_param = model.get_nb_trainable_parameters()
+    print(
+        f"Trainable: {trainable_params/1e6:.4f}M | All: {all_param/1e6:.4f}M | Ratio: {trainable_params/all_param * 100:.3f}%"
+    )
+    addition_config["model_struct"] = str(model)
     model.to(device)
 
     processor: LlavaProcessor = LlavaProcessor.from_pretrained(args.model_id)
@@ -100,7 +107,7 @@ def main():
     train_dataset = DiscDataset(train_set, train=True)
     train_loader = DataLoader(
         train_dataset,
-        batch_size=args.batch_size,  # max for 20GB GPU
+        batch_size=args.batch_size,
         prefetch_factor=args.prefetch_factor,
         num_workers=args.num_workers,
         shuffle=True,
@@ -109,7 +116,7 @@ def main():
     val_dataset = DiscDataset(val_set, train=True)
     val_loader = DataLoader(
         val_dataset,
-        batch_size=args.batch_size,  # max for 20GB GPU
+        batch_size=args.batch_size,
         num_workers=args.num_workers,
     )
 
@@ -124,7 +131,8 @@ def main():
     from torch.optim import AdamW
     from torch.optim.lr_scheduler import OneCycleLR, StepLR
 
-    optimizer = AdamW(model.parameters(), lr=args.lr)
+    training_params = [p for p in model.parameters() if p.requires_grad]
+    optimizer = AdamW(training_params, lr=args.lr)
     scheduler = OneCycleLR(
         optimizer, max_lr=args.lr, steps_per_epoch=len(train_loader), epochs=args.epochs
     )
@@ -133,6 +141,7 @@ def main():
     accum_steps = getattr(args, "accumulation_steps", 1)
     print(f"Effective batch size: {args.batch_size * accum_steps}")
     print(f"Using {device} device")
+    ##########################################################
 
     project_name = "DLCV-FINAL-Traffic-LLaVA"
     if hasattr(args, "project_name"):
@@ -141,16 +150,24 @@ def main():
     run_name = f"{args.model_id.split('/')[-1]}-{timestamp}"
     if hasattr(args, "run_name"):
         run_name = args.run_name
-    init_wandb(project_name, run_name, config=vars(args))
+    init_wandb(project_name, run_name, config=vars(args), log_dir=out_dir)
     logger = init_logger()
     if yaml_file:
         yaml_args = YamlArgsLoader(out_config_file)
-        yaml_args.save_args(args, exclude=["config_file", "output_dir"])
+        yaml_args.save_args(
+            args, exclude=["config_file", "output_dir"], additional=addition_config
+        )
+
+    del addition_config
     epochs = args.epochs
     timer = Timer(10)  # 10 minutes
     DEBUG = PerformanceMonitor(args.debug)
-
     global_step = 0
+    accum_loss = 0
+    for name, param in model.named_parameters():
+        if not (param.requires_grad == ("lora" in name)):
+            print(f"Warning: {name}.required_grad= {param.requires_grad}.")
+
     for epoch in range(epochs):
         model.train()
 
@@ -171,25 +188,34 @@ def main():
                     **inputs,
                     labels=labels,
                     vision_feature_select_strategy=args.vision_feature_select_strategy,
+                    use_cache=use_cache,
                 )
                 loss = out.loss / accum_steps
                 loss.backward()
+                if args.debug:
+                    for name, param in model.named_parameters():
+                        if param.requires_grad and param.grad is None:
+                            print(f"Warning: {name}.grad is None.")
                 global_step += 1
-                # scaler.scale(loss).backward()
+                accum_loss += loss.item()
                 if global_step % accum_steps == 0:
                     optimizer.step()
-                    # scaler.step(optimizer)
-                    # scaler.update()
                     optimizer.zero_grad()
                     scheduler.step()
 
-                logger({"train/loss": loss.item()})
-                logger({"train/lr": scheduler.get_last_lr()[0]})
+                    logger({"train/loss": accum_loss, "global_step": global_step})
+                    logger(
+                        {
+                            "train/lr": scheduler.get_last_lr()[0],
+                            "global_step": global_step,
+                        }
+                    )
+                    accum_loss = 0
 
                 DEBUG.stamp()
                 DEBUG.stamp()
                 DEBUG.log_performance(log_per=20)
-                del out
+                del out, loss, labels
 
         model.eval()
         val_bar = tqdm(val_loader)

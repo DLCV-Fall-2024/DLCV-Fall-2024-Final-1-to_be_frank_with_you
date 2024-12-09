@@ -69,6 +69,22 @@ class ModelParams(ParamGroup):
         self.device = "cuda"
         self.patch_size = 14
         self.vision_feature_select_strategy = "full"  # "default" or "full"
+        self.gradient_checkpointing = True
+        self.lora_config = {
+            "r": 4,
+            "lora_alpha": 32,
+            "target_modules": [
+                "q_proj",
+                "v_proj",
+                "multi_modal_projector.linear_1",
+                "multi_modal_projector.linear_2",
+            ],
+            "exclude_modules": "vision_tower.*",
+            "lora_dropout": 0.1,
+            "use_dora": True,
+            "bias": "none",
+            "task_type": "CAUSAL_LM",
+        }
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -155,7 +171,13 @@ class YamlArgsLoader:
                 setattr(args, key, value)
         return args
 
-    def save_args(self, args: Namespace, exclude: List[str] = []):
+    def save_args(
+        self,
+        args: Namespace,
+        exclude: List[str] = [],
+        additional: dict = {},
+        only_log_diff=False,
+    ):
         """
         Save the current arguments to the YAML file.
         :param args: argparse.Namespace object with already parsed arguments.
@@ -174,23 +196,41 @@ class YamlArgsLoader:
             default_values = vars(params_class())
             params = vars(group)
             for key, value in params.items():
-                if key in default_values and default_values[key] == value:
+                if (
+                    only_log_diff
+                    and key in default_values
+                    and default_values[key] == value
+                ):
                     del default_values[key]
                 del origin[key]
             params = {k: v for k, v in params.items() if k in default_values}
             if len(params.keys()) == 0:
-                # print("No changes in", params_class().__yaml_name__)
                 continue
             config[params_class().__yaml_name__] = params
 
-        for key, value in origin.items():
-            if "." in key:
-                keys = key.split(".")
-                if keys[0] not in config:
-                    config[keys[0]] = {}
-                config[keys[0]][keys[1]] = value
-            else:
-                config[key] = value
-
+        config.update(origin)
+        config.update(additional)
         with open(self.yaml_file, "w") as file:
-            yaml.dump(config, file)
+            yaml.dump(config, file, Dumper=CustomDumper, default_flow_style=False)
+
+
+class CustomDumper(yaml.Dumper):
+    def increase_indent(self, flow=False, indentless=False):
+        return super(CustomDumper, self).increase_indent(flow, False)
+
+
+# Custom representer for strings to use `|` for multiline strings
+def str_presenter(dumper, data):
+    if "\n" in data:  # Use literal block style `|` for multiline strings
+        return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data)
+
+
+# Avoid quotes on keys
+def dict_presenter(dumper, data):
+    return dumper.represent_dict(data.items())
+
+
+# Register custom representers
+yaml.add_representer(str, str_presenter, Dumper=CustomDumper)
+yaml.add_representer(dict, dict_presenter, Dumper=CustomDumper)

@@ -1,3 +1,4 @@
 dataset_path: data
 epochs: 3
-batch_size: 1
+batch_size: 2
+prefetch_factor: 4
