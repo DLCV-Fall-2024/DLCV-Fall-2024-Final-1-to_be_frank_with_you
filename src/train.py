@@ -8,17 +8,14 @@ import torch
 from pytorch_lightning import seed_everything
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from transformers import GenerationConfig, LlavaForConditionalGeneration, LlavaProcessor
+from transformers import (GenerationConfig, LlavaForConditionalGeneration,
+                          LlavaProcessor)
 
-from src.arguments import (
-    DatasetParams,
-    ModelParams,
-    OptimizationParams,
-    PipelineParams,
-    YamlArgsLoader,
-)
+from src.arguments import (DatasetParams, ModelParams, OptimizationParams,
+                           PipelineParams, YamlArgsLoader)
 from utils.dataset import DiscDataset
-from utils.log import PerformanceMonitor, Timer, init_logger, init_wandb, pretty_print
+from utils.log import (PerformanceMonitor, Timer, init_logger, init_wandb,
+                       pretty_print)
 
 
 def arg_parser():
@@ -73,7 +70,7 @@ def main():
 
     model = LlavaForConditionalGeneration.from_pretrained(
         args.model_id,
-        torch_dtype=torch.float16,
+        torch_dtype=torch.bfloat16,
     )
 
     model = get_peft_model(model, lora_config)
@@ -104,10 +101,10 @@ def main():
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,  # max for 20GB GPU
+        prefetch_factor=args.prefetch_factor,
         num_workers=args.num_workers,
         shuffle=True,
     )
-    train_bar = tqdm(train_loader)
 
     val_dataset = DiscDataset(val_set, train=True)
     val_loader = DataLoader(
@@ -115,7 +112,6 @@ def main():
         batch_size=args.batch_size,  # max for 20GB GPU
         num_workers=args.num_workers,
     )
-    val_bar = tqdm(val_loader)
 
     timestamp = time.strftime("%m%d_%H%M%S")
     out_dir = Path(args.output_dir) / timestamp
@@ -132,6 +128,11 @@ def main():
     scheduler = OneCycleLR(
         optimizer, max_lr=args.lr, steps_per_epoch=len(train_loader), epochs=args.epochs
     )
+    optimizer.zero_grad()
+
+    accum_steps = getattr(args, "accumulation_steps", 1)
+    print(f"Effective batch size: {args.batch_size * accum_steps}")
+    print(f"Using {device} device")
 
     project_name = "DLCV-FINAL-Traffic-LLaVA"
     if hasattr(args, "project_name"):
@@ -148,39 +149,39 @@ def main():
     epochs = args.epochs
     timer = Timer(10)  # 10 minutes
     DEBUG = PerformanceMonitor(args.debug)
+
+    global_step = 0
     for epoch in range(epochs):
         model.train()
+
+        train_bar = tqdm(train_loader)
         train_bar.set_description(f"[Train {epoch}/{epochs}]")
         for ids, batch in train_bar:
             with DEBUG:
                 inputs = transform(batch["image"], prompt=batch["prompt"]).to(
-                    device, torch.float16
+                    device, torch.bfloat16
                 )
                 labels = inputs["input_ids"].clone()
 
-                # randomly mask 10% of the tokens in the prompt, but avoid masking the image tokens
-                # mask_indices = torch.randperm(labels.numel())
-                # mask_indices = mask_indices[: int(0.1 * mask_indices.numel())]
-                # mask_indices = mask_indices[
-                #     labels[mask_indices] != processor.image_token
-                # ]
-                # print(processor.tokenizer)
-                # inputs["input_ids"][mask_indices] = processor.tokenizer.mask_token_id
-                # labels[labels == processor.image_token] = -100  # ignore image tokens
-
                 DEBUG.stamp()
                 DEBUG.set_params(**{"labels": labels})
-
+                # scaler = torch.amp.GradScaler()
+                # with torch.amp.autocast(device_type=str(device)):
                 out = model.forward(
                     **inputs,
                     labels=labels,
                     vision_feature_select_strategy=args.vision_feature_select_strategy,
                 )
-                loss = out.loss
+                loss = out.loss / accum_steps
                 loss.backward()
-                optimizer.step()
-                scheduler.step()
-                optimizer.zero_grad()
+                global_step += 1
+                # scaler.scale(loss).backward()
+                if global_step % accum_steps == 0:
+                    optimizer.step()
+                    # scaler.step(optimizer)
+                    # scaler.update()
+                    optimizer.zero_grad()
+                    scheduler.step()
 
                 logger({"train/loss": loss.item()})
                 logger({"train/lr": scheduler.get_last_lr()[0]})
@@ -188,8 +189,10 @@ def main():
                 DEBUG.stamp()
                 DEBUG.stamp()
                 DEBUG.log_performance(log_per=20)
+                del out
 
         model.eval()
+        val_bar = tqdm(val_loader)
         val_bar.set_description(f"[Val {epoch}/{epochs}]")
         with torch.no_grad():
             for ids, batch in val_bar:
@@ -214,6 +217,9 @@ def main():
 
                     DEBUG.stamp()
                     DEBUG.log_performance(log_per=20)
+
+        ckpt_path = ckpt_dir / f"model-{epoch}.pt"
+        torch.save(model.state_dict(), ckpt_path)
 
 
 if __name__ == "__main__":

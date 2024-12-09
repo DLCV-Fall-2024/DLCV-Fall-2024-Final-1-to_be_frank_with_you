@@ -44,15 +44,12 @@ class DiscDataset(Dataset):
                 ]
             )
 
-        self.cache = {}
         self.is_train = train
 
     def __len__(self):
         return len(self.config)
 
     def __getitem__(self, idx):
-        if idx in self.cache:
-            return self.cache[idx]
 
         item = self.config[idx]
         img = PIL.Image.open(item["img_path"]).convert("RGB")
@@ -71,16 +68,11 @@ class DiscDataset(Dataset):
             }
 
         if self.is_train:
-            self.cache[idx] = (
-                item["id"],
-                {
-                    "image": inputs["image"],
-                    "prompt": f"{inputs['prompt']} {item['gt']}",
-                },
-            )
-        else:
-            self.cache[idx] = (item["id"], inputs)
-        return self.cache[idx]
+            inputs = {
+                "image": inputs["image"],
+                "prompt": f"{inputs['prompt']} {item['gt']}",
+            }
+        return (item["id"], inputs)
 
 
 VALID_SPLIT = ["train", "val", "test", "all"]

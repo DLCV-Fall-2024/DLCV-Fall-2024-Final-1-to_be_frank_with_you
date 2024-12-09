@@ -91,7 +91,8 @@ class DatasetParams(ParamGroup):
         self._dataset_path = "data/test"
         self.seed = 42
         self.batch_size = 8
-        self.num_workers = 20
+        self.num_workers = 10
+        self.prefetch_factor = 2
         super().__init__(parser, "Dataset Parameters")
 
 
@@ -102,6 +103,7 @@ class OptimizationParams(ParamGroup):
         self.epochs = 100
         self.lr = 3e-5
         self.optimizer_type = "default"
+        self.accumulation_steps = 4
         super().__init__(parser, "Optimization Parameters")
 
 
