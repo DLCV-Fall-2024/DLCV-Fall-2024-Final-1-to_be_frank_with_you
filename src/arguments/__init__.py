@@ -69,7 +69,7 @@ class ModelParams(ParamGroup):
         self.device = "cuda"
         self.patch_size = 14
         self.vision_feature_select_strategy = "full"  # "default" or "full"
-        self.gradient_checkpointing = True
+        self.gradient_checkpointing = False
         self.lora_config = {
             "r": 4,
             "lora_alpha": 32,
@@ -168,7 +168,25 @@ class YamlArgsLoader:
                     if hasattr(params_class, k):
                         setattr(args, k, v)
             elif hasattr(args, key):
-                setattr(args, key, value)
+                if isinstance(value, dict):
+                    for k, v in value.items():
+                        setattr(args, k, v)
+                else:
+                    setattr(args, key, value)
+            elif "." in key:
+                keys = key.split(".")
+                current = args
+                for k in keys[:-1]:
+                    try:
+                        current = getattr(current, k)
+                    except AttributeError:
+                        _current = current.get(k, {})
+                        setattr(current, k, _current)
+                        current = _current
+                try:
+                    setattr(current, keys[-1], value)
+                except AttributeError:
+                    current[keys[-1]] = value
         return args
 
     def save_args(

@@ -1,10 +1,14 @@
 import argparse
 import json
+import os
 import re
 import time
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
+from accelerate import Accelerator
+from accelerate.utils import DeepSpeedPlugin, FullyShardedDataParallelPlugin
 from pytorch_lightning import seed_everything
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -39,6 +43,8 @@ def arg_parser():
         default="configs/train.yaml",
         help="Path to the configuration file.",
     )
+    parser.add_argument("--local_rank", type=int, default=os.getenv("LOCAL_RANK", -1))
+
     mp = ModelParams(parser)
     dp = DatasetParams(parser)
     pp = PipelineParams(parser)
@@ -47,9 +53,27 @@ def arg_parser():
     return args
 
 
+def activate_only_lora(model):
+    for name, param in model.named_parameters():
+        param.requires_grad = "lora" in name
+
+
+__USE_DEEPSPEED__ = True
+
+
 def main():
     args = arg_parser()
     addition_config = {}
+    ### DeepSpeed Compatibility ###
+    local_rank = -1
+    try:
+        torch.cuda.set_device(args.local_rank)
+        dist.init_process_group(backend="nccl")  # NCCL is GPU-aware
+        local_rank = torch.distributed.get_rank()
+    except:
+        __USE_DEEPSPEED__ = False
+
+    ###############################
     yaml_file = Path(args.config_file)
     if yaml_file.exists():
         yaml_args = YamlArgsLoader(yaml_file)
@@ -69,18 +93,25 @@ def main():
 
     ## enable gradient checkpointing for memory efficiency
     use_cache = True
-    if getattr(args, "gradient_checkpointing", True):
-        model.gradient_checkpointing_enable()
+    if getattr(args, "gradient_checkpointing", True) and not __USE_DEEPSPEED__:
+        model.gradient_checkpointing_enable({"use_reentrant": True})
         model.enable_input_require_grads()
         use_cache = False
+
     ## finetune only language model
     lora_config = LoraConfig(**args.lora_config)
     model = get_peft_model(model, lora_config)
+    # model.add_adapter(lora_config)
+
+    # enable gradient
+
+    addition_config["model_struct"] = str(model)
+    activate_only_lora(model)
+
     trainable_params, all_param = model.get_nb_trainable_parameters()
     print(
         f"Trainable: {trainable_params/1e6:.4f}M | All: {all_param/1e6:.4f}M | Ratio: {trainable_params/all_param * 100:.3f}%"
     )
-    addition_config["model_struct"] = str(model)
     model.to(device)
 
     processor: LlavaProcessor = LlavaProcessor.from_pretrained(args.model_id)
@@ -141,6 +172,23 @@ def main():
     accum_steps = getattr(args, "accumulation_steps", 1)
     print(f"Effective batch size: {args.batch_size * accum_steps}")
     print(f"Using {device} device")
+    if __USE_DEEPSPEED__:
+        dsp_plugin = DeepSpeedPlugin(
+            gradient_accumulation_steps=16,
+            gradient_clipping=1.0,
+            zero_stage=3,
+        )
+        fsdp_plugin = None
+        if getattr(args, "gradient_checkpointing", True):
+            fsdp_plugin = FullyShardedDataParallelPlugin(activation_checkpointing=True)
+            use_cache = False
+        accelerator = Accelerator(deepspeed_plugin=dsp_plugin, fsdp_plugin=fsdp_plugin)
+
+        model, optimizer, train_loader, val_loader, scheduler, processor = (
+            accelerator.prepare(
+                model, optimizer, train_loader, val_loader, scheduler, processor
+            )
+        )
     ##########################################################
 
     project_name = "DLCV-FINAL-Traffic-LLaVA"
@@ -150,8 +198,14 @@ def main():
     run_name = f"{args.model_id.split('/')[-1]}-{timestamp}"
     if hasattr(args, "run_name"):
         run_name = args.run_name
-    init_wandb(project_name, run_name, config=vars(args), log_dir=out_dir)
-    logger = init_logger()
+    init_wandb(
+        project_name,
+        run_name,
+        config=vars(args),
+        log_dir=out_dir,
+        local_rank=local_rank if __USE_DEEPSPEED__ else None,
+    )
+    logger = init_logger(local_rank=local_rank if __USE_DEEPSPEED__ else None)
     if yaml_file:
         yaml_args = YamlArgsLoader(out_config_file)
         yaml_args.save_args(
@@ -178,39 +232,45 @@ def main():
                 inputs = transform(batch["image"], prompt=batch["prompt"]).to(
                     device, torch.bfloat16
                 )
+                for k, v in inputs.items():
+                    if torch.is_tensor(v) and v.dtype in [
+                        torch.float32,
+                        torch.float64,
+                        torch.float16,
+                        torch.bfloat16,
+                    ]:
+                        v.requires_grad = True
                 labels = inputs["input_ids"].clone()
 
                 DEBUG.stamp()
                 DEBUG.set_params(**{"labels": labels})
-                # scaler = torch.amp.GradScaler()
-                # with torch.amp.autocast(device_type=str(device)):
                 out = model.forward(
                     **inputs,
                     labels=labels,
                     vision_feature_select_strategy=args.vision_feature_select_strategy,
                     use_cache=use_cache,
                 )
-                loss = out.loss / accum_steps
+                loss = out.loss  # / accum_steps
                 loss.backward()
                 if args.debug:
                     for name, param in model.named_parameters():
                         if param.requires_grad and param.grad is None:
-                            print(f"Warning: {name}.grad is None.")
+                            print(f"Warning: {name}.grad is {param.grad}.")
                 global_step += 1
                 accum_loss += loss.item()
-                if global_step % accum_steps == 0:
-                    optimizer.step()
-                    optimizer.zero_grad()
-                    scheduler.step()
+                # if global_step % accum_steps == 0:
+                optimizer.step()
+                optimizer.zero_grad()
+                scheduler.step()
 
-                    logger({"train/loss": accum_loss, "global_step": global_step})
-                    logger(
-                        {
-                            "train/lr": scheduler.get_last_lr()[0],
-                            "global_step": global_step,
-                        }
-                    )
-                    accum_loss = 0
+                logger({"train/loss": accum_loss, "global_step": global_step})
+                logger(
+                    {
+                        "train/lr": scheduler.get_last_lr()[0],
+                        "global_step": global_step,
+                    }
+                )
+                accum_loss = 0
 
                 DEBUG.stamp()
                 DEBUG.stamp()

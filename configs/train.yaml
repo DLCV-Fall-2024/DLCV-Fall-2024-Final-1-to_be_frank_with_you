@@ -1,4 +1,6 @@
 dataset_path: data
 epochs: 3
-batch_size: 2
+batch_size: 1
 prefetch_factor: 4
+# debug: True
+lora_config.use_dora: False
