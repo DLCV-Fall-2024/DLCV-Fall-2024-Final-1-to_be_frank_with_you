@@ -1,0 +1,6 @@
+[submodule "DLCV-Fall-2024-Final-1-to_be_frank_with_you/oneformer"]
+	path = DLCV-Fall-2024-Final-1-to_be_frank_with_you/oneformer
+	url = https://github.com/SHI-Labs/OneFormer.git
+[submodule "oneformer"]
+	path = oneformer
+	url = https://github.com/SHI-Labs/OneFormer.git
