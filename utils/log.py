@@ -100,6 +100,9 @@ class Timer:
         if limit is not None:
             self.limit = limit
 
+    def reset(self):
+        self.restart()
+
     def stop(self):
         self.end_time = time.time()
 

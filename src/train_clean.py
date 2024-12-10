@@ -224,6 +224,12 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
                 DEBUG.log_performance(log_per=20)
                 del out, loss, labels
 
+                if timer.timesup():
+                    ## save model for a certain interval
+                    ckpt_path = ckpt_dir / f"latest.pt"
+                    torch.save(model.state_dict(), ckpt_path)
+                    timer.reset()
+
         model.eval()
         val_bar = tqdm(val_loader)
         val_bar.set_description(f"[Val {epoch}/{epochs}]")
