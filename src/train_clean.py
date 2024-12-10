@@ -3,6 +3,7 @@ from pathlib import Path
 
 import torch
 import torch.distributed as dist
+import typer
 from accelerate import Accelerator
 from accelerate.utils import DeepSpeedPlugin, FullyShardedDataParallelPlugin
 from pytorch_lightning import seed_everything
@@ -10,12 +11,10 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import LlavaForConditionalGeneration, LlavaProcessor
 
-import typer
 from src.arguments.dataclass import Config
 from utils import default
 from utils.dataset import DiscDataset
 from utils.log import PerformanceMonitor, Timer, init_logger, init_wandb, pretty_print
-
 
 __USE_DEEPSPEED__ = True
 
@@ -58,30 +57,57 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
 
     ################## Below should be wrap in the class ######################
     # TODO: (yck) modify this for a more general use case, e.g. load our own model
-    from peft import LoraConfig, get_peft_model
-    from transformers import Trainer, TrainingArguments
+    from peft import LoraConfig, PeftModel, get_peft_model
 
-    model = LlavaForConditionalGeneration.from_pretrained(
-        mp.model_id,
-        torch_dtype=torch.bfloat16,
+    model: LlavaForConditionalGeneration = (
+        LlavaForConditionalGeneration.from_pretrained(
+            mp.model_id,
+            torch_dtype=torch.bfloat16,
+        )
     )
+    import transformers
+    from transformers import DepthAnythingForDepthEstimation
 
+    print("Original Vision Tower type:", type(model.vision_tower))
+    processor = transformers.AutoImageProcessor.from_pretrained(
+        "facebook/dinov2-large", torch_dtype=torch.bfloat16
+    )
+    dinov2_vitl14_reg = transformers.AutoModel.from_pretrained(
+        "facebook/dinov2-large", torch_dtype=torch.bfloat16
+    )
+    print("DINO type: ", type(dinov2_vitl14_reg))
+    # dinov2_vitl14_reg = torch.hub.load("facebookresearch/dinov2", "dinov2_vitl14_reg")
+    model.vision_tower = dinov2_vitl14_reg
+    for param in model.vision_tower.parameters():
+        param.requires_grad = False
     ## enable gradient checkpointing for memory efficiency
     use_cache = True
     if mp.gradient_checkpointing and not __USE_DEEPSPEED__:
+        print("Enable gradient checkpointing")
         model.gradient_checkpointing_enable({"use_reentrant": True})
         model.enable_input_require_grads()
         use_cache = False
 
+    ## no lora but FF
+    no_lora_but_FF_prefix = []
+    # no_lora_but_FF_prefix = ["multi_modal_projector"]
+    mp.lora_config["target_modules"] = [
+        layer
+        for layer in mp.lora_config["target_modules"]
+        if not any([prefix in layer for prefix in no_lora_but_FF_prefix])
+    ]
     ## finetune only language model
     lora_config = LoraConfig(**mp.lora_config)
-    model = get_peft_model(model, lora_config)
+    model: PeftModel = get_peft_model(model, lora_config)
     # model.add_adapter(lora_config)
 
     # enable gradient
 
     addition_config["model_struct"] = str(model)
     activate_only_lora(model)
+    for name, param in model.named_parameters():
+        if any([prefix in name for prefix in no_lora_but_FF_prefix]):
+            param.requires_grad = True
 
     trainable_params, all_param = model.get_nb_trainable_parameters()
     print(
@@ -114,8 +140,8 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     train_loader = DataLoader(
         train_dataset,
         batch_size=op.batch_size,
-        prefetch_factor=op.prefetch_factor,
-        num_workers=op.num_workers,
+        prefetch_factor=dp.prefetch_factor,
+        num_workers=dp.num_workers,
         shuffle=True,
     )
 
@@ -123,13 +149,12 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     val_loader = DataLoader(
         val_dataset,
         batch_size=op.batch_size,
-        num_workers=op.num_workers,
+        num_workers=dp.num_workers,
     )
 
     timestamp = time.strftime("%m%d_%H%M%S")
     out_dir = Path(output_dir) / timestamp
 
-    out_config_file = out_dir / "config.yaml"
     ckpt_dir = out_dir / "ckpts"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
@@ -168,7 +193,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
 
     project_name = default(config.project_name, "DLCV-FINAL-Traffic-LLaVA")
     run_name = default(
-        config.run_name, f"{name}-{config.model_id.split('/')[-1]}-{timestamp}"
+        config.run_name, f"{name}-{mp.model_id.split('/')[-1]}-DINO-{timestamp}"
     )
 
     init_wandb(
