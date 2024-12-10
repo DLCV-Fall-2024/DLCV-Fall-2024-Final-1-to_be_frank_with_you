@@ -6,8 +6,10 @@ transformers==4.46.3
 accelerate==0.34.0
 google-generativeai
 torch
-# transformers
-# accelerate
+torchvision
+pytorch-lightning
 datasets
 peft
 diffusers
+omegaconf
+typer
