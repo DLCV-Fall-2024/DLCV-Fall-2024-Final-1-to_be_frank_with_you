@@ -66,7 +66,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
         )
     )
     import transformers
-    from transformers import DepthAnythingForDepthEstimation
+    from transformers import DepthAnythingForDepthEstimation, Dinov2Model
 
     print("Original Vision Tower type:", type(model.vision_tower))
     processor = transformers.AutoImageProcessor.from_pretrained(
@@ -83,7 +83,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     ## enable gradient checkpointing for memory efficiency
     use_cache = True
     if mp.gradient_checkpointing and not __USE_DEEPSPEED__:
-        print("Enable gradient checkpointing")
+        print("Enable gradient checkpointing\n")
         model.gradient_checkpointing_enable({"use_reentrant": True})
         model.enable_input_require_grads()
         use_cache = False
@@ -97,6 +97,8 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
         if not any([prefix in layer for prefix in no_lora_but_FF_prefix])
     ]
     ## finetune only language model
+    if mp.lora_config["use_dora"]:
+        print("Using DORA\n")
     lora_config = LoraConfig(**mp.lora_config)
     model: PeftModel = get_peft_model(model, lora_config)
     # model.add_adapter(lora_config)
@@ -270,6 +272,12 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
                 DEBUG.log_performance(log_per=20)
                 del out, loss, labels
 
+                if timer.timesup():
+                    ## save model for a certain interval
+                    ckpt_path = ckpt_dir / f"latest.pt"
+                    torch.save(model.state_dict(), ckpt_path)
+                    timer.reset()
+
         model.eval()
         val_bar = tqdm(val_loader)
         val_bar.set_description(f"[Val {epoch}/{epochs}]")
@@ -297,7 +305,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
                     DEBUG.stamp()
                     DEBUG.log_performance(log_per=20)
 
-        ckpt_path = ckpt_dir / f"model-{epoch}.pt"
+        ckpt_path = ckpt_dir / f"{epoch}.pt"
         torch.save(model.state_dict(), ckpt_path)
 
 
