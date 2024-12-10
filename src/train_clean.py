@@ -25,7 +25,7 @@ def activate_only_lora(model):
         param.requires_grad = "lora" in name
 
 
-app = typer.Typer(pretty_exceptions_show_locals=False, pretty_exceptions_enable=False)
+app = typer.Typer(pretty_exceptions_show_locals=False)
 
 
 @app.command()
