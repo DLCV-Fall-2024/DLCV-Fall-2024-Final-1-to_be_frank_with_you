@@ -18,7 +18,14 @@ from utils.log import pretty_print
 
 
 class DiscDataset(Dataset):
-    def __init__(self, path: Union[str, Path], transform=None, train=True):
+    def __init__(
+        self,
+        path: Union[str, Path],
+        transform=None,
+        train=True,
+        use_trainer=False,
+        trainer_input_kwargs=None,
+    ):
 
         # self.data = [
         #     transform(sample) if transform else sample for sample in raw_dataset
@@ -45,12 +52,15 @@ class DiscDataset(Dataset):
             )
 
         self.is_train = train
+        self.use_trainer = use_trainer
+        self.trainer_input_kwargs = trainer_input_kwargs
 
     def __len__(self):
         return len(self.config)
 
     def __getitem__(self, idx):
-
+        if self.use_trainer:
+            return self.__trainer_getitem__(idx)
         item = self.config[idx]
         img = PIL.Image.open(item["img_path"]).convert("RGB")
         prompt = item["prompt"]
@@ -73,6 +83,22 @@ class DiscDataset(Dataset):
                 "prompt": f"{inputs['prompt']} {item['gt']}",
             }
         return (item["id"], inputs)
+
+    def __trainer_getitem__(self, idx):
+        item = self.config[idx]
+        img = PIL.Image.open(item["img_path"]).convert("RGB")
+        prompt = item["prompt"]
+        if isinstance(prompt, int):
+            prompt = self.prompts[prompt]
+        inputs: dict = self.transform(img, prompt=apply_chat_template(prompt))
+        for key in inputs.keys():
+            inputs[key] = inputs[key].squeeze(0)
+
+        inputs["labels"] = inputs["input_ids"].clone()
+        inputs["id"] = item["id"]
+        inputs.update(self.trainer_input_kwargs)
+        # pretty_print(inputs)
+        return inputs
 
 
 VALID_SPLIT = ["train", "val", "test", "all"]

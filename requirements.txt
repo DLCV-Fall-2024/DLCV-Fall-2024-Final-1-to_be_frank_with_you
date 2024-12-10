@@ -3,11 +3,11 @@ pycocoevalcap
 datasets
 huggingface_hub
 transformers==4.46.3
-accelerate==0.26.0
+accelerate==0.34.0
 google-generativeai
 torch
-transformers
-accelerate
+# transformers
+# accelerate
 datasets
 peft
 diffusers

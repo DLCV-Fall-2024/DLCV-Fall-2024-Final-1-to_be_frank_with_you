@@ -12,7 +12,12 @@ from accelerate.utils import DeepSpeedPlugin, FullyShardedDataParallelPlugin
 from pytorch_lightning import seed_everything
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from transformers import GenerationConfig, LlavaForConditionalGeneration, LlavaProcessor
+from transformers import (
+    GenerationConfig,
+    LlavaForConditionalGeneration,
+    LlavaProcessor,
+    Trainer,
+)
 
 from src.arguments import (
     DatasetParams,
@@ -23,6 +28,8 @@ from src.arguments import (
 )
 from utils.dataset import DiscDataset
 from utils.log import PerformanceMonitor, Timer, init_logger, init_wandb, pretty_print
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 def arg_parser():
@@ -83,7 +90,7 @@ def main():
 
     ################## Below should be wrap in the class ######################
     # TODO: (yck) modify this for a more general use case, e.g. load our own model
-    from peft import LoraConfig, get_peft_model
+    from peft import LoraConfig, get_peft_model, get_peft_model_state_dict
     from transformers import Trainer, TrainingArguments
 
     model = LlavaForConditionalGeneration.from_pretrained(
@@ -104,7 +111,6 @@ def main():
     # model.add_adapter(lora_config)
 
     # enable gradient
-
     addition_config["model_struct"] = str(model)
     activate_only_lora(model)
 
@@ -217,7 +223,6 @@ def main():
     timer = Timer(10)  # 10 minutes
     DEBUG = PerformanceMonitor(args.debug)
     global_step = 0
-    accum_loss = 0
     for name, param in model.named_parameters():
         if not (param.requires_grad == ("lora" in name)):
             print(f"Warning: {name}.required_grad= {param.requires_grad}.")
@@ -225,6 +230,7 @@ def main():
     for epoch in range(epochs):
         model.train()
 
+        accum_loss = 0
         train_bar = tqdm(train_loader)
         train_bar.set_description(f"[Train {epoch}/{epochs}]")
         for ids, batch in train_bar:
@@ -276,19 +282,21 @@ def main():
                 DEBUG.stamp()
                 DEBUG.log_performance(log_per=20)
                 del out, loss, labels
+        print("Saving checkpoint...")
+        ckpt_path = ckpt_dir / f"{epoch}.pt"
+        torch.save(get_peft_model_state_dict(model), ckpt_path)
 
         model.eval()
         val_bar = tqdm(val_loader)
         val_bar.set_description(f"[Val {epoch}/{epochs}]")
+        accum_loss = 0
         with torch.no_grad():
             for ids, batch in val_bar:
                 with DEBUG:
                     inputs = transform(batch["image"], prompt=batch["prompt"]).to(
                         device
                     )
-                    labels = processor.tokenizer(
-                        batch["labels"], return_tensors="pt", padding=True
-                    ).input_ids.to(device)
+                    labels = inputs["input_ids"].clone()
                     DEBUG.stamp()
                     DEBUG.set_params(**{"labels": labels})
 
@@ -298,14 +306,12 @@ def main():
                         vision_feature_select_strategy=args.vision_feature_select_strategy,
                     )
                     loss = out.loss
-
+                    accum_loss += loss.item()
                     logger({"val/loss": loss.item()})
 
                     DEBUG.stamp()
                     DEBUG.log_performance(log_per=20)
-
-        ckpt_path = ckpt_dir / f"model-{epoch}.pt"
-        torch.save(model.state_dict(), ckpt_path)
+        print(f"Epoch {epoch}: Val Loss: {accum_loss/len(val_loader):.4f}")
 
 
 if __name__ == "__main__":

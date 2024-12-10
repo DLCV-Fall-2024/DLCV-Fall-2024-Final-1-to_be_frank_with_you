@@ -68,8 +68,9 @@ class ModelParams(ParamGroup):
         self.model_id = "llava-hf/llava-1.5-7b-hf"
         self.device = "cuda"
         self.patch_size = 14
-        self.vision_feature_select_strategy = "full"  # "default" or "full"
-        self.gradient_checkpointing = False
+        self.vision_feature_select_strategy = "default"  # "default" or "full"
+        # self.vision_feature_select_strategy = "full"  # "default" or "full"
+        self.gradient_checkpointing = True
         self.lora_config = {
             "r": 4,
             "lora_alpha": 32,

@@ -22,7 +22,13 @@ from transformers import (
     LlavaProcessor,
 )
 
-from src.arguments import DatasetParams, ModelParams, PipelineParams, YamlArgsLoader
+from src.arguments import (
+    DatasetParams,
+    ModelParams,
+    OptimizationParams,
+    PipelineParams,
+    YamlArgsLoader,
+)
 from utils.dataset import DiscDataset
 from utils.log import PerformanceMonitor, Timer, pretty_print
 
@@ -60,6 +66,7 @@ def arg_parser():
     mp = ModelParams(parser)
     dp = DatasetParams(parser)
     pp = PipelineParams(parser)
+    op = OptimizationParams(parser)
     args = parser.parse_args()
     return args
 
@@ -77,10 +84,21 @@ def main():
 
     ################## Below should be wrap in the class ######################
     # TODO: (yck) modify this for a more general use case, e.g. load our own model
+    from peft import LoraConfig, get_peft_model, get_peft_model_state_dict
+    from transformers import Trainer, TrainingArguments
+
     model = LlavaForConditionalGeneration.from_pretrained(
         args.model_id,
-        torch_dtype=torch.float16,
-    ).to(device)
+        torch_dtype=torch.bfloat16,
+    )
+
+    lora_config = LoraConfig(**args.lora_config)
+    model = get_peft_model(model, lora_config)
+    model.load_state_dict(
+        torch.load("runs/1209_212635/ckpts/1.pt", weights_only=True), strict=False
+    )
+    model = model.to(device)
+
     processor = LlavaProcessor.from_pretrained(args.model_id)
     processor.patch_size = args.patch_size
     processor.vision_feature_select_strategy = args.vision_feature_select_strategy
@@ -123,7 +141,7 @@ def main():
     if out_path.is_file():
         out_path = Path(args.output_file)
     else:
-        out_path = out_path / f"{timestamp}-{dataset_type}" / "pred.json"
+        out_path = out_path / f"{timestamp}-{dataset_type}" / "submission.json"
     out_config_file = out_path.parent / "config.yaml"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -149,6 +167,7 @@ def main():
                 max_new_tokens=args.max_new_tokens,
                 do_sample=False,
                 generation_config=generation_config,
+                vision_feature_select_strategy=args.vision_feature_select_strategy,
             )
 
             DEBUG.stamp()
