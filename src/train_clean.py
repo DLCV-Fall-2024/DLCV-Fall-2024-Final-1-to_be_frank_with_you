@@ -1,6 +1,5 @@
 import typer
 
-
 app = typer.Typer(pretty_exceptions_show_locals=False)
 
 
@@ -11,6 +10,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
 
     import torch
     import torch.distributed as dist
+
     # from accelerate import Accelerator
     # from accelerate.utils import DeepSpeedPlugin, FullyShardedDataParallelPlugin
     from pytorch_lightning import seed_everything
@@ -24,8 +24,13 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
 
     from utils import default
     from utils.dataset import DiscDataset
-    from utils.log import PerformanceMonitor, Timer, init_logger, init_wandb, pretty_print
-    
+    from utils.log import (
+        PerformanceMonitor,
+        Timer,
+        init_logger,
+        init_wandb,
+        pretty_print,
+    )
 
     config, timestamp, output_dir, checkpoint_dir, log_dir = load_config(name, Config)
     if config is None:
@@ -46,8 +51,6 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     local_rank = -1
     use_cache = not (mp.gradient_checkpointing and not __USE_DEEPSPEED__)
 
-    ###############################
-
     model = LlavaPEFT(
         model_id=mp.model_id,
         model_params=mp,
@@ -60,9 +63,40 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     addition_config["model_struct"] = model.get_model_struct()
 
     trainable_params, all_param = model.llava.get_nb_trainable_parameters()
+
+    # import transformers
+    # from transformers import DepthAnythingForDepthEstimation
+
+    # print("Original Vision Tower type:", type(model.vision_tower))
+    # processor = transformers.AutoImageProcessor.from_pretrained(
+    #     "facebook/dinov2-large", torch_dtype=torch.bfloat16
+    # )
+    # dinov2_vitl14_reg = transformers.AutoModel.from_pretrained(
+    #     "facebook/dinov2-large", torch_dtype=torch.bfloat16
+    # )
+    # print("DINO type: ", type(dinov2_vitl14_reg))
+    # # dinov2_vitl14_reg = torch.hub.load("facebookresearch/dinov2", "dinov2_vitl14_reg")
+    # model.vision_tower = dinov2_vitl14_reg
+    # for param in model.vision_tower.parameters():
+    #     param.requires_grad = False
+
+    # ## no lora but FF
+    # no_lora_but_FF_prefix = []
+    # # no_lora_but_FF_prefix = ["multi_modal_projector"]
+    # mp.lora_config["target_modules"] = [
+    #     layer
+    #     for layer in mp.lora_config["target_modules"]
+    #     if not any([prefix in layer for prefix in no_lora_but_FF_prefix])
+    # ]
+
+    # for name, param in model.named_parameters():
+    #     if any([prefix in name for prefix in no_lora_but_FF_prefix]):
+    #         param.requires_grad = True
+
     print(
         f"Trainable: {trainable_params/1e6:.4f}M | All: {all_param/1e6:.4f}M | Ratio: {trainable_params/all_param * 100:.3f}%"
     )
+
     # model.to(device)
 
     dump_additional_config(addition_config, output_dir)
@@ -80,7 +114,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     train_dataset = DiscDataset(train_set, train=True)
     train_loader = DataLoader(
         train_dataset,
-        batch_size=dp.batch_size,
+        batch_size=op.batch_size,
         prefetch_factor=dp.prefetch_factor,
         num_workers=dp.num_workers,
         shuffle=True,
@@ -89,10 +123,9 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     val_dataset = DiscDataset(val_set, train=True)
     val_loader = DataLoader(
         val_dataset,
-        batch_size=dp.batch_size,
+        batch_size=op.batch_size,
         num_workers=dp.num_workers,
     )
-
     ###################### Optimization ######################
 
     from torch.optim import AdamW

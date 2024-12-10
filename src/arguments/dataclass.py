@@ -1,7 +1,6 @@
-from typing import Optional
-
 import os
 from dataclasses import dataclass, field
+from typing import Optional
 
 
 @dataclass
@@ -10,10 +9,10 @@ class ModelParams:
     device: str = "cuda"
     patch_size: int = 14
     vision_feature_select_strategy: str = "full"  # "default" or "full"
-    gradient_checkpointing: bool = False
+    gradient_checkpointing: bool = True
     lora_config: dict = field(
         default_factory=lambda: {
-            "r": 4,
+            "r": 16,
             "lora_alpha": 32,
             "target_modules": [
                 "q_proj",
@@ -37,17 +36,17 @@ class PipelineParams:
 
 @dataclass
 class DatasetParams:
-    dataset_path: str = "data/test"
+    dataset_path: str = "data"
     seed: int = 42
-    batch_size: int = 8
     num_workers: int = 10
     prefetch_factor: int = 2
 
 
 @dataclass
 class OptimizationParams:
-    epochs: int = 100
+    epochs: int = 1
     lr: float = 3e-5
+    batch_size: int = 4
     optimizer_type: str = "default"
     accumulation_steps: int = 4
 
