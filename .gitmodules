@@ -4,3 +4,6 @@
 [submodule "depth_anything_v2"]
 	path = depth_anything_v2
 	url = git@github.com:DepthAnything/Depth-Anything-V2
+[submodule "oneformer"]
+	path = oneformer
+	url = git@github.com:SHI-Labs/OneFormer.git
