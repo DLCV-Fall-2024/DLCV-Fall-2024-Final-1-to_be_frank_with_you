@@ -12,6 +12,7 @@ from transformers import LlavaForConditionalGeneration, LlavaProcessor
 
 import typer
 from src.arguments.dataclass import Config
+from src.utils.experiment import load_config, dump_additional_config
 from utils import default
 from utils.dataset import DiscDataset
 from utils.log import PerformanceMonitor, Timer, init_logger, init_wandb, pretty_print
@@ -30,9 +31,8 @@ app = typer.Typer(pretty_exceptions_show_locals=False)
 
 @app.command()
 def main(name: str = typer.Argument(..., help="Name of the experiment")):
-    from .utils.experiment import load_config
 
-    config, model_dir, log_dir, output_dir = load_config(name, Config)
+    config, output_dir, checkpoint_dir, log_dir = load_config(name, Config)
     if config is None:
         print("Configuration created")
         return
@@ -76,11 +76,12 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     ## finetune only language model
     lora_config = LoraConfig(**mp.lora_config)
     model = get_peft_model(model, lora_config)
+    addition_config["model_struct"] = str(model)
+
     # model.add_adapter(lora_config)
 
     # enable gradient
 
-    addition_config["model_struct"] = str(model)
     activate_only_lora(model)
 
     trainable_params, all_param = model.get_nb_trainable_parameters()
@@ -180,7 +181,9 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     )
     logger = init_logger(local_rank=local_rank if __USE_DEEPSPEED__ else None)
 
+    dump_additional_config(addition_config, output_dir)
     del addition_config
+
     epochs = op.epochs
     timer = Timer(10)  # 10 minutes
     DEBUG = PerformanceMonitor(pp.debug)

@@ -1,15 +1,14 @@
-from typing import Optional, Tuple, Type, TypeVar, cast, Any
+from typing import Optional, Tuple, Type, TypeVar, cast, Any, Dict
 
 import os
+import time
 from omegaconf import OmegaConf
 
 
 ROOT_DIR = os.path.join(os.path.dirname(__file__), "..", "..")
 
 
-def create_exp_assets(
-    root: str, exp_name: str, default_config: Any
-) -> Tuple[bool, str, str]:
+def create_config(root: str, exp_name: str, default_config: Any) -> Tuple[bool, str]:
     configs_dir = os.path.join(root, "configs")
     config_path = os.path.join(configs_dir, f"{exp_name}.yaml")
     os.makedirs(configs_dir, exist_ok=True)
@@ -19,14 +18,19 @@ def create_exp_assets(
         with open(config_path, "w") as config_file:
             OmegaConf.save(default_config, config_file)
 
-    model_dir = os.path.join(root, "models", exp_name)
-    log_dir = os.path.join(root, "logs", exp_name)
-    output_dir = os.path.join(root, "outputs", exp_name)
-    os.makedirs(model_dir, exist_ok=True)
-    os.makedirs(log_dir, exist_ok=True)
-    os.makedirs(output_dir, exist_ok=True)
+    return not config_exists, config_path
 
-    return not config_exists, config_path, model_dir, log_dir, output_dir
+
+def create_assets(root: str, exp_name: str) -> Tuple[str, str, str]:
+    output_dir = os.path.join(root, "outputs", exp_name)
+    checkpoint_dir = os.path.join(output_dir, "checkpoint")
+    log_dir = os.path.join(output_dir, "log")
+
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    os.makedirs(log_dir, exist_ok=True)
+
+    return output_dir, checkpoint_dir, log_dir
 
 
 C = TypeVar("C")
@@ -40,20 +44,24 @@ def load_config(
     # Initialize default configuration
     default_config = OmegaConf.structured(Config)
 
-    # Create experiment assets (folders and default configuration)
-    new_config, default_config_path, model_dir, log_dir, output_dir = (
-        create_exp_assets(ROOT_DIR, name, default_config)
-    )
-
+    new_config, default_config_path = create_config(ROOT_DIR, name, default_config)
     if new_config:
-        return None, model_dir, log_dir, output_dir
-
+        return None, None, None, None
     if config_path is None:
         config_path = default_config_path
+
+    # Create experiment assets (folders and default configuration)
+    timestamp = time.strftime("%m%d_%H%M%S")
+    output_dir, checkpoint_dir, log_dir = create_assets(ROOT_DIR, f"{name}_{timestamp}")
 
     # Load user-modified configuration
     config = OmegaConf.load(config_path)
     config = OmegaConf.merge(default_config, config)
     config = cast(Config, config)
 
-    return config, model_dir, log_dir, output_dir
+    return config, output_dir, checkpoint_dir, log_dir
+
+
+def dump_additional_config(config: Dict[str, Any], output_dir: str):
+    with open(os.path.join(output_dir, "config.yaml"), "w") as f:
+        OmegaConf.save(config, f)
