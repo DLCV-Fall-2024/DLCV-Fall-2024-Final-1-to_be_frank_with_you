@@ -14,7 +14,7 @@ class ModelParams:
     use_depth: bool = False
     depth_model_id: str = "depth-anything/Depth-Anything-V2-Small-hf"
     use_segmentation: bool = False
-    segmentation_model_id: str = "facebook/dinov2-large"
+    segmentation_model_id: str = "shi-labs/oneformer_ade20k_dinat_large"
 
     fuser_id: str = "gemini"
 
