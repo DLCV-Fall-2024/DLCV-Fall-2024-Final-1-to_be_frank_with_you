@@ -4,6 +4,8 @@ from dataclasses_json import dataclass_json
 import json
 from pathlib import Path
 
+import typer
+
 import PIL
 import PIL.Image
 from datasets import load_dataset
@@ -146,8 +148,46 @@ def update_stats(stats: Dict, key: str, value: Union[int, float, str]):
         stats[key]["num"] += 1
 
 
+def compress_config(config_path: Union[str, Path]):
+
+    config = json.load(open(config_path, "r"))
+    if isinstance(config, dict):
+        json.dump(
+            config,
+            open(config_path, "w"),
+        )
+        return
+    prompt_type = {}
+    prompts = []
+    for item in config:
+        prompt = item["prompt"]
+        if prompt not in prompt_type:
+            prompts.append(prompt)
+            prompt_type[prompt] = len(prompt_type)
+        item["prompt"] = prompt_type[prompt]
+    json.dump(
+        {
+            "data": config,
+            "prompts": prompts,
+        },
+        open(config_path, "w"),
+    )
+
+
+role_mapping = {"user": "USER", "assistant": "ASSISTANT"}
+
+
+def apply_chat_template(conversation):
+    return "USER: " + conversation + "ASSISTANT:"
+
+
+app = typer.Typer()
+
+
+@app.command("preprocess")
 def preprocess_dataset(
-    split: str = "all", cache_dir: Union[Path, str] = "./data"
+    split: str = typer.Option("all", help="Split to preprocess"),
+    cache_dir: str = typer.Option("./data", help="Cache directory"),
 ) -> Tuple:
     assert split in VALID_SPLIT, f"split must be one of {VALID_SPLIT}"
     split = [split] if split != "all" else VALID_SPLIT[:-1]
@@ -213,38 +253,124 @@ def preprocess_dataset(
         compress_config(save_dir / "config.json")
 
 
-def compress_config(config_path: Union[str, Path]):
+import torch
+from transformers import AutoProcessor, AutoModel
 
-    config = json.load(open(config_path, "r"))
-    if isinstance(config, dict):
-        json.dump(
-            config,
-            open(config_path, "w"),
-        )
-        return
-    prompt_type = {}
-    prompts = []
-    for item in config:
-        prompt = item["prompt"]
-        if prompt not in prompt_type:
-            prompts.append(prompt)
-            prompt_type[prompt] = len(prompt_type)
-        item["prompt"] = prompt_type[prompt]
-    json.dump(
-        {
-            "data": config,
-            "prompts": prompts,
-        },
-        open(config_path, "w"),
+
+def process_output(output, vision_feature_layer: int = -2):
+    hidden_states = output.hidden_states
+    features = hidden_states[vision_feature_layer]
+    return features
+
+
+def process_depth_output(output, vision_feature_layer: int = -2):
+    raise NotImplementedError("Depth output processing not implemented")
+
+
+def process_segmentation_output(output, vision_feature_layer: int = -2):
+    raise NotImplementedError("Segmentation output processing not implemented")
+
+
+PROCESS_OUTPUT_FUNC = {
+    "default": process_output,
+    "depth": process_depth_output,
+    "segmentation": process_segmentation_output,
+}
+
+
+@app.command("extract")
+def extract_image_features(
+    split: str = typer.Option("all", help="Split to preprocess"),
+    cache_dir: str = typer.Option("./data", help="Cache directory"),
+    vision_feature_layer: int = typer.Option(-2, help="Vision feature layer"),
+    feature_name: str = typer.Option("default", help="Feature name"),
+    model_id: str = typer.Option("facebook/dinov2-large", help="Encoder id"),
+    batch_size: int = typer.Option(16, help="Batch size"),
+):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
+
+    assert split in VALID_SPLIT, f"split must be one of {VALID_SPLIT}"
+    split = [split] if split != "all" else VALID_SPLIT[:-1]
+
+    cache_dir = Path(cache_dir)
+    assert cache_dir.exists(), f"cache directory {cache_dir} not found"
+
+    stat_path = cache_dir / "statistics.json"
+    assert stat_path.exists(), f"statistics.json not found in {cache_dir}"
+    statistics = json.load(open(stat_path, "r"))
+
+    # Check if splits exist
+    for s in split:
+        split_dir = cache_dir / s
+        assert split_dir.exists(), f"split directory {split_dir} not found"
+        config_path = split_dir / "config.json"
+        assert config_path.exists(), f"config.json not found in {split_dir}"
+
+    # Load model
+    print(f"Loading model {model_id}")
+    processor = AutoProcessor.from_pretrained(model_id, torch_dtype=torch.bfloat16)
+    model = AutoModel.from_pretrained(model_id, torch_dtype=torch.bfloat16)
+    model.to(device)
+    print(f"Model loaded: {model}")
+
+    transform = transforms.Compose(
+        [
+            transforms.Resize((720, 720)),
+            transforms.ToTensor(),
+        ]
     )
 
+    for s in split:
+        split_dir = cache_dir / s
+        config_path = split_dir / "config.json"
+        config = json.load(open(config_path, "r"))
 
-role_mapping = {"user": "USER", "assistant": "ASSISTANT"}
+        features_dir = split_dir / "features"
+        features_dir.mkdir(exist_ok=True, parents=True)
+        feature_dir = features_dir / feature_name
+        feature_dir.mkdir(exist_ok=True, parents=True)
 
+        batch_index = []
+        batch_img = []
+        batch_name = []
 
-def apply_chat_template(conversation):
-    return "USER: " + conversation + "ASSISTANT:"
+        data = config["data"]
+        for i, item in enumerate(tqdm(data)):
+            img_path = item["img_path"]
+            img_name = Path(img_path).stem
+
+            img = PIL.Image.open(img_path).convert("RGB")
+            img = transform(img)
+            batch_index.append(i)
+            batch_img.append(img)
+            batch_name.append(img_name)
+
+            if len(batch_index) == batch_size or i == len(data) - 1:
+                inputs = processor(
+                    batch_img, return_tensors="pt", padding=True, do_rescale=False
+                )
+                inputs = {k: v.to(device) for k, v in inputs.items()}
+
+                out = model.forward(**inputs, output_hidden_states=True)
+                process_func = PROCESS_OUTPUT_FUNC[feature_name]
+                features = process_func(out, vision_feature_layer)
+                features = features.detach().cpu()
+
+                for i, feature, name in zip(batch_index, features, batch_name):
+                    feature_path = feature_dir / f"{name}.pt"
+                    torch.save(feature, feature_path)
+
+                    if "features" not in data[i]:
+                        data[i]["features"] = {}
+                    data[i]["features"][feature_name] = str(feature_path)
+
+                batch_index = []
+                batch_img = []
+                batch_name = []
+
+        json.dump(config, open(config_path, "w"), indent=4)
 
 
 if __name__ == "__main__":
-    preprocess_dataset()
+    app()
