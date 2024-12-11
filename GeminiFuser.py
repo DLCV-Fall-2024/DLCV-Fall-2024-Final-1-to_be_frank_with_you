@@ -23,21 +23,23 @@ class GeminiFusionTransformer(nn.Module):
         self.norm = nn.LayerNorm(d_model)
 
     def Fuse(self, image_tokens, depth_tokens):
-        # Concatenate image and depth tokens
-        combined_tokens = torch.cat([image_tokens, depth_tokens], dim=0)
+        # batch_size = image_tokens.size(0)
+        
+        # Concatenate image and depth tokens (along sequence dimension)
+        combined_tokens = torch.cat([image_tokens, depth_tokens], dim=1)  # Shape: [batch_size, 2 * num_tokens, d_model]
 
         # Apply shared Q, K, V projection
-        qkv = self.qkv(combined_tokens)  # Shape: [257+257, 3*d_model]
+        qkv = self.qkv(combined_tokens)  # Shape: [batch_size, 2 * num_tokens, 3 * d_model]
         q, k, v = qkv.chunk(3, dim=-1)  # Split into Q, K, V
 
         # Separate the Q, K, V for image and depth tokens
-        q_img = q[:image_tokens.size(0)]  # Image query tokens
-        k_img = k[:image_tokens.size(0)]  # Image key tokens
-        v_img = v[:image_tokens.size(0)]  # Image value tokens
+        q_img = q[:, :image_tokens.size(1)]  # Image query tokens
+        k_img = k[:, :image_tokens.size(1)]  # Image key tokens
+        v_img = v[:, :image_tokens.size(1)]  # Image value tokens
 
-        q_depth = q[image_tokens.size(0):]  # Depth query tokens
-        k_depth = k[image_tokens.size(0):]  # Depth key tokens
-        v_depth = v[image_tokens.size(0):]  # Depth value tokens
+        q_depth = q[:, image_tokens.size(1):]  # Depth query tokens
+        k_depth = k[:, image_tokens.size(1):]  # Depth key tokens
+        v_depth = v[:, image_tokens.size(1):]  # Depth value tokens
 
         # Apply the MLP + Softmax to combine K_image and K_depth
         k_combined_img = self.mlp(torch.cat([k_img, k_depth], dim=-1))  # Combine keys using MLP
@@ -45,6 +47,15 @@ class GeminiFusionTransformer(nn.Module):
 
         k_combined_depth = self.mlp(torch.cat([k_depth, k_img], dim=-1))  # Combine keys using MLP
         k_combined_depth = F.softmax(k_combined_depth, dim=-1)  # Apply softmax
+
+        # Transpose for multihead attention (Shape: [seq_len, batch_size, d_model])
+        q_img = q_img.transpose(0, 1)
+        k_img = k_img.transpose(0, 1)
+        v_img = v_img.transpose(0, 1)
+
+        q_depth = q_depth.transpose(0, 1)
+        k_depth = k_depth.transpose(0, 1)
+        v_depth = v_depth.transpose(0, 1)
 
         # First embedding: Attention on Image tokens + Joint attention (Image + Depth)
         attn_img, _ = self.attn(q_img, k_img, v_img)  # Attention using image tokens
@@ -58,5 +69,9 @@ class GeminiFusionTransformer(nn.Module):
         embedding_1 = attn_img + attn_joint_img_depth
         embedding_2 = attn_depth + attn_joint_depth_img
 
-        # Return both embeddings
-        return embedding_1 + embedding_2
+        # Add embeddings and apply LayerNorm
+        combined_embedding = embedding_1 + embedding_2
+        combined_embedding = self.norm(combined_embedding)
+
+        return combined_embedding.transpose(0, 1)  # Transpose back to [batch_size, seq_len, d_model]
+
