@@ -35,9 +35,10 @@ class DepthEncoder(VisionEncoder):
 
             # Normalize each depth map (scale to 0-255)
             normalized_depth = (depth - depth.min()) / (depth.max() - depth.min())  # Normalize to [0, 1]
-            normalized_depth = normalized_depth.detach().cpu().numpy() * 255  # Convert to [0, 255] range
+            normalized_depth = normalized_depth * 255  # Convert to [0, 255] range
 
             # Append the normalized depth map to the list
             normalized_depths.append(normalized_depth)
-        normalized_depths = torch.tensor(normalized_depths)
+
+        normalized_depths = torch.stack(normalized_depths, dim=0)
         return normalized_depths
