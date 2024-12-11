@@ -6,6 +6,7 @@ from typing import Optional
 @dataclass
 class ModelParams:
     model_id: str = "llava-hf/llava-1.5-7b-hf"
+    encoder_model_id: str = "facebook/dinov2-large"
     device: str = "cuda"
     patch_size: int = 14
     vision_feature_select_strategy: str = "full"  # "default" or "full"

@@ -5,18 +5,18 @@ app = typer.Typer(pretty_exceptions_show_locals=False)
 
 @app.command()
 def main(name: str = typer.Argument(..., help="Name of the experiment")):
-    import time
+
+    from tqdm import tqdm
     from pathlib import Path
+    from omegaconf import OmegaConf
 
     import torch
     import torch.distributed as dist
-
-    # from accelerate import Accelerator
-    # from accelerate.utils import DeepSpeedPlugin, FullyShardedDataParallelPlugin
-    from pytorch_lightning import seed_everything
     from torch.utils.data import DataLoader
-    from tqdm import tqdm
-    from omegaconf import OmegaConf
+    from pytorch_lightning import seed_everything
+
+    import transformers
+    from transformers import DepthAnythingForDepthEstimation
 
     from src.arguments.dataclass import Config
     from src.utils.experiment import load_config, dump_additional_config
@@ -52,50 +52,23 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     use_cache = not (mp.gradient_checkpointing and not __USE_DEEPSPEED__)
 
     model = LlavaPEFT(
-        model_id=mp.model_id,
         model_params=mp,
         gradient_checkpointing=not use_cache,
         lora_config=mp.lora_config,
     )
+    addition_config["model_struct"] = model.get_model_struct()
+
     transform = model.transform
     processor = model.processor
 
-    addition_config["model_struct"] = model.get_model_struct()
-
     trainable_params, all_param = model.llava.get_nb_trainable_parameters()
-
-    # import transformers
-    # from transformers import DepthAnythingForDepthEstimation
-
-    # print("Original Vision Tower type:", type(model.vision_tower))
-    # processor = transformers.AutoImageProcessor.from_pretrained(
-    #     "facebook/dinov2-large", torch_dtype=torch.bfloat16
-    # )
-    # dinov2_vitl14_reg = transformers.AutoModel.from_pretrained(
-    #     "facebook/dinov2-large", torch_dtype=torch.bfloat16
-    # )
-    # print("DINO type: ", type(dinov2_vitl14_reg))
-    # # dinov2_vitl14_reg = torch.hub.load("facebookresearch/dinov2", "dinov2_vitl14_reg")
-    # model.vision_tower = dinov2_vitl14_reg
-    # for param in model.vision_tower.parameters():
-    #     param.requires_grad = False
-
-    # ## no lora but FF
-    # no_lora_but_FF_prefix = []
-    # # no_lora_but_FF_prefix = ["multi_modal_projector"]
-    # mp.lora_config["target_modules"] = [
-    #     layer
-    #     for layer in mp.lora_config["target_modules"]
-    #     if not any([prefix in layer for prefix in no_lora_but_FF_prefix])
-    # ]
-
-    # for name, param in model.named_parameters():
-    #     if any([prefix in name for prefix in no_lora_but_FF_prefix]):
-    #         param.requires_grad = True
-
     print(
         f"Trainable: {trainable_params/1e6:.4f}M | All: {all_param/1e6:.4f}M | Ratio: {trainable_params/all_param * 100:.3f}%"
     )
+
+    # for name, param in model.named_parameters():
+    #     if param.requires_grad:
+    #         print(f"Trainable: {name}")
 
     # model.to(device)
 
@@ -139,7 +112,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     optimizer.zero_grad()
 
     accum_steps = getattr(op, "accumulation_steps", 1)
-    print(f"Effective batch size: {dp.batch_size * accum_steps}")
+    print(f"Effective batch size: {op.batch_size * accum_steps}")
     print(f"Using {device} device")
 
     ##########################################################
@@ -226,7 +199,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
 
                 if timer.timesup():
                     ## save model for a certain interval
-                    ckpt_path = ckpt_dir / f"latest.pt"
+                    ckpt_path = checkpoint_dir / f"latest.pt"
                     torch.save(model.state_dict(), ckpt_path)
                     timer.reset()
 

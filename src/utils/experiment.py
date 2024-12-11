@@ -47,7 +47,7 @@ def load_config(
 
     new_config, default_config_path = create_config(ROOT_DIR, name, default_config)
     if new_config:
-        return None, None, None, None
+        return None, None, None, None, None
     if config_path is None:
         config_path = default_config_path
 
