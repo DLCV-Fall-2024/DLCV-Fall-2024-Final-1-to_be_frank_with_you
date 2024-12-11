@@ -87,7 +87,9 @@ class VisionTower(torch.nn.Module):
         auxiliary_features = []
         if self.n_auxiliary_features > 0:
             for i, encoder in enumerate(self.auxiliary_encoders):
-                feature = encoder(pixel_values[i + 1], **kwargs)
+                images = encoder(pixel_values[i + 1], **kwargs)
+                feature = self.encoder(images, **kwargs)
+                # feature = encoder(pixel_values[i + 1], **kwargs)
                 auxiliary_features.append(
                     feature.hidden_states[self.vision_feature_layer]
                 )
@@ -204,4 +206,3 @@ class LlavaPEFT(torch.nn.Module):
             inputs["pixel_values"] = pixel_values.unsqueeze(0)
 
         return self.llava(**inputs)
-
