@@ -100,7 +100,7 @@ class DiscDataset(Dataset):
         if self.is_train:
             inputs = {
                 "image": inputs["image"],
-                "prompt": f"{inputs['prompt']} {item['gt']}",
+                "prompt": f"{inputs['prompt']} {item.gt}",
             }
 
         return (item.id, inputs)

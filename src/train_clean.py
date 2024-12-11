@@ -122,13 +122,14 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
         config.run_name, f"{name}-{mp.model_id.split('/')[-1]}-{timestamp}"
     )
 
-    init_wandb(
-        project_name,
-        run_name,
-        config=OmegaConf.to_container(config, resolve=True),
-        log_dir=log_dir,
-        local_rank=local_rank if __USE_DEEPSPEED__ else None,
-    )
+    if pp.wandb:
+        init_wandb(
+            project_name,
+            run_name,
+            config=OmegaConf.to_container(config, resolve=True),
+            log_dir=log_dir,
+            local_rank=local_rank if __USE_DEEPSPEED__ else None,
+        )
     logger = init_logger(local_rank=local_rank if __USE_DEEPSPEED__ else None)
 
     epochs = op.epochs
@@ -140,10 +141,10 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
         if not (param.requires_grad == ("lora" in name)):
             print(f"Warning: {name}.required_grad= {param.requires_grad}.")
 
-    model.to(device)
+    # model.to(device)
 
     for epoch in range(epochs):
-        model.train()
+        # model.train()
 
         train_bar = tqdm(train_loader)
         train_bar.set_description(f"[Train {epoch}/{epochs}]")

@@ -12,6 +12,8 @@ try:
 except ImportError:
     __WANDB_AVAILABLE__ = False
 
+__WANDB_ENABLED__ = False
+
 
 def init_wandb(project_name, run_name, config, log_dir=None, local_rank=None, **kwargs):
     if not __WANDB_AVAILABLE__ or (isinstance(local_rank, int) and local_rank != 0):
@@ -21,9 +23,11 @@ def init_wandb(project_name, run_name, config, log_dir=None, local_rank=None, **
     )
     wandb.config.update(config)
 
+    __WANDB_ENABLED__ = True
+
 
 def init_logger(verbose=True, local_rank=None):
-    if not __WANDB_AVAILABLE__:
+    if not __WANDB_ENABLED__:
         return print if verbose else lambda *args, **kwargs: None
     if (isinstance(local_rank, int) and local_rank != 0) or not verbose:
         return lambda *args, **kwargs: None
