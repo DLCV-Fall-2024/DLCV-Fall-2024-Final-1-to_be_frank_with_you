@@ -181,7 +181,7 @@ def apply_chat_template(conversation):
     return "USER: " + conversation + "ASSISTANT:"
 
 
-app = typer.Typer()
+app = typer.Typer(pretty_exceptions_show_locals=False)
 
 
 @app.command("preprocess")
@@ -314,6 +314,8 @@ def extract_image_features(
     model.to(device)
     print(f"Model loaded: {model}")
 
+    model_name = model_id.replace("/", "_")
+
     transform = transforms.Compose(
         [
             transforms.Resize((720, 720)),
@@ -326,9 +328,7 @@ def extract_image_features(
         config_path = split_dir / "config.json"
         config = json.load(open(config_path, "r"))
 
-        features_dir = split_dir / "features"
-        features_dir.mkdir(exist_ok=True, parents=True)
-        feature_dir = features_dir / feature_name
+        feature_dir = split_dir / "features" / feature_name / model_name
         feature_dir.mkdir(exist_ok=True, parents=True)
 
         batch_index = []
@@ -363,7 +363,9 @@ def extract_image_features(
 
                     if "features" not in data[i]:
                         data[i]["features"] = {}
-                    data[i]["features"][feature_name] = str(feature_path)
+                    if feature_name not in data[i]["features"]:
+                        data[i]["features"][feature_name] = {}
+                    data[i]["features"][feature_name][model_name] = str(feature_path)
 
                 batch_index = []
                 batch_img = []
