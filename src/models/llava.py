@@ -1,6 +1,7 @@
 from typing import Any, Dict
 
 import torch
+from PIL.Image import Image
 from transformers import LlavaForConditionalGeneration, LlavaProcessor
 from peft import LoraConfig, get_peft_model
 
@@ -18,16 +19,16 @@ class LlavaPEFT(torch.nn.Module):
         super().__init__()
 
         self.model_id = model_id
-        model = LlavaForConditionalGeneration.from_pretrained(
+        llava = LlavaForConditionalGeneration.from_pretrained(
             self.model_id,
             torch_dtype=torch.bfloat16,
         )
         if gradient_checkpointing:
-            model.enable_input_require_grads()
-            model.gradient_checkpointing_enable({"use_reentrant": True})
+            llava.enable_input_require_grads()
+            llava.gradient_checkpointing_enable({"use_reentrant": True})
 
         lora_config = LoraConfig(**lora_config)
-        self.peft = get_peft_model(model, lora_config)
+        self.llava = get_peft_model(llava, lora_config)
         self.activate_only_lora()
 
         processor: LlavaProcessor = LlavaProcessor.from_pretrained(model_params.model_id)
@@ -36,13 +37,13 @@ class LlavaPEFT(torch.nn.Module):
         self.processor = processor
 
     def get_model_struct(self):
-        return str(self.peft)
+        return str(self.llava)
 
     def activate_only_lora(self):
-        for name, param in self.peft.named_parameters():
+        for name, param in self.llava.named_parameters():
             param.requires_grad = "lora" in name
 
-    def transform(self, img, prompt):
+    def transform(self, img: Image, prompt: str):
         return self.processor(
             img,
             text=prompt,
@@ -52,4 +53,4 @@ class LlavaPEFT(torch.nn.Module):
         )
 
     def forward(self, **inputs):
-        return self.peft(**inputs)
+        return self.llava(**inputs)

@@ -1,36 +1,37 @@
 from typing import Optional, Tuple, Type, TypeVar, cast, Any, Dict
 
-import os
+from pathlib import Path
 import time
+import yaml
 from omegaconf import OmegaConf
 
 
-ROOT_DIR = os.path.join(os.path.dirname(__file__), "..", "..")
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 
 
-def create_config(root: str, exp_name: str, default_config: Any) -> Tuple[bool, str]:
-    configs_dir = os.path.join(root, "configs")
-    config_path = os.path.join(configs_dir, f"{exp_name}.yaml")
-    os.makedirs(configs_dir, exist_ok=True)
+def create_config(root: Path, exp_name: str, default_config: Any) -> Tuple[bool, str]:
+    configs_dir = root / "configs"
+    config_path = configs_dir / f"{exp_name}.yaml"
+    configs_dir.mkdir(parents=True, exist_ok=True)
 
-    config_exists = os.path.exists(config_path)
+    config_exists = config_path.exists()
     if not config_exists:
-        with open(config_path, "w") as config_file:
+        with config_path.open("w") as config_file:
             OmegaConf.save(default_config, config_file)
 
-    return not config_exists, config_path
+    return not config_exists, str(config_path)
 
 
-def create_assets(root: str, exp_name: str) -> Tuple[str, str, str]:
-    output_dir = os.path.join(root, "outputs", exp_name)
-    checkpoint_dir = os.path.join(output_dir, "checkpoint")
-    log_dir = os.path.join(output_dir, "log")
+def create_assets(root: Path, exp_name: str) -> Tuple[str, str, str]:
+    output_dir = root / "outputs" / exp_name
+    checkpoint_dir = output_dir / "checkpoint"
+    log_dir = output_dir / "log"
 
-    os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    os.makedirs(log_dir, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
 
-    return output_dir, checkpoint_dir, log_dir
+    return str(output_dir), str(checkpoint_dir), str(log_dir)
 
 
 C = TypeVar("C")
@@ -59,9 +60,31 @@ def load_config(
     config = OmegaConf.merge(default_config, config)
     config = cast(Config, config)
 
-    return config, output_dir, checkpoint_dir, log_dir
+    return config, timestamp, output_dir, checkpoint_dir, log_dir
+
+
+class CustomDumper(yaml.Dumper):
+    def increase_indent(self, flow=False, indentless=False):
+        return super(CustomDumper, self).increase_indent(flow, False)
+
+
+# Custom representer for strings to use `|` for multiline strings
+def str_presenter(dumper, data):
+    if "\n" in data:  # Use literal block style `|` for multiline strings
+        return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data)
+
+
+# Avoid quotes on keys
+def dict_presenter(dumper, data):
+    return dumper.represent_dict(data.items())
+
+
+# Register custom representers
+yaml.add_representer(str, str_presenter, Dumper=CustomDumper)
+yaml.add_representer(dict, dict_presenter, Dumper=CustomDumper)
 
 
 def dump_additional_config(config: Dict[str, Any], output_dir: str):
-    with open(os.path.join(output_dir, "config.yaml"), "w") as f:
-        OmegaConf.save(config, f)
+    with (Path(output_dir) / "config.yaml").open("w") as f:
+        yaml.dump(config, f, Dumper=CustomDumper, default_flow_style=False)

@@ -1,55 +1,73 @@
+from typing import Dict, Optional, Tuple, Union, List, cast, Callable
+from dataclasses import dataclass
+from dataclasses_json import dataclass_json
 import json
 from pathlib import Path
-from typing import Dict, List, Tuple, Union
 
-import matplotlib.pyplot as plt
-import numpy as np
 import PIL
 import PIL.Image
 from datasets import load_dataset
 from PIL.Image import Image
-from torch.utils.data import Dataset, IterableDataset
-from torchvision import datasets, transforms
-from torchvision.transforms import ToPILImage
-from torchvision.utils import make_grid
+from torch.utils.data import Dataset
+from torchvision import transforms
 from tqdm import tqdm
 
 from utils.log import pretty_print
+
+
+@dataclass_json
+@dataclass
+class DiscDatasetItem:
+    id: str
+    prompt: int | str
+    img_path: str
+    gt: Optional[str]
+
+
+@dataclass_json
+@dataclass
+class DiscDatasetConfig:
+    data: List[DiscDatasetItem]
+    prompts: List[str]
+
+
+ProcessorTransform = Callable[[Image, str], dict]
+Transform = transforms.Compose | ProcessorTransform
 
 
 class DiscDataset(Dataset):
     def __init__(
         self,
         path: Union[str, Path],
-        transform=None,
-        train=True,
-        use_trainer=False,
-        trainer_input_kwargs=None,
+        transform: Optional[Transform] = None,
+        train: bool = True,
+        use_trainer: bool = False,
+        trainer_input_kwargs: Optional[dict] = None,
     ):
-
-        # self.data = [
-        #     transform(sample) if transform else sample for sample in raw_dataset
-        # ]
         path = Path(path)
         img_dir = path / "images"
-        assert (path / "config.json").exists(), f"config.json not found in {path}"
+        config_path = path / "config.json"
+        assert config_path.exists(), f"config.json not found in {path}"
         assert (
             img_dir.exists() and img_dir.is_dir()
         ), f"images directory not found in {path}"
 
-        self.config = json.load(open(path / "config.json", "r"))
-        if isinstance(self.config, dict):
-            self.prompts = self.config["prompts"]
-            self.config = self.config["data"]
+        with open(config_path, "r") as f:
+            config = cast(DiscDatasetConfig, DiscDatasetConfig.from_json(f.read()))
+        self.config = config.data
+        self.prompts = config.prompts
 
-        self.transform = transform
-        if self.transform is None:
-            self.transform = transforms.Compose(
+        if transform is None:
+            transform = transforms.Compose(
                 [
                     transforms.Resize((720, 720)),
                     transforms.ToTensor(),
                 ]
             )
+        assert (
+            isinstance(transform, transforms.Compose) and not use_trainer
+        ), "transform shouldn't be a Compose when using trainer"
+        self.transform = cast(Transform, transform)
 
         self.is_train = train
         self.use_trainer = use_trainer
@@ -58,46 +76,51 @@ class DiscDataset(Dataset):
     def __len__(self):
         return len(self.config)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int):
         if self.use_trainer:
             return self.__trainer_getitem__(idx)
+
         item = self.config[idx]
-        img = PIL.Image.open(item["img_path"]).convert("RGB")
-        prompt = item["prompt"]
+        img = PIL.Image.open(item.img_path).convert("RGB")
+        prompt = item.prompt
         if isinstance(prompt, int):
             prompt = self.prompts[prompt]
-        try:
-            inputs = self.transform(img, prompt=apply_chat_template(prompt))
-            for key in inputs.keys():
-                inputs[key] = inputs[key].squeeze(0)
-        except Exception as e:
+
+        if isinstance(self.transform, transforms.Compose):
             img = self.transform(img)
             inputs = {
                 "image": img,
                 "prompt": apply_chat_template(prompt),
             }
+        else:
+            inputs = self.transform(img, prompt=apply_chat_template(prompt))
+            for key in inputs.keys():
+                inputs[key] = inputs[key].squeeze(0)
 
         if self.is_train:
             inputs = {
                 "image": inputs["image"],
                 "prompt": f"{inputs['prompt']} {item['gt']}",
             }
-        return (item["id"], inputs)
 
-    def __trainer_getitem__(self, idx):
+        return (item.id, inputs)
+
+    def __trainer_getitem__(self, idx: int):
         item = self.config[idx]
-        img = PIL.Image.open(item["img_path"]).convert("RGB")
-        prompt = item["prompt"]
+        img = PIL.Image.open(item.img_path).convert("RGB")
+        prompt = item.prompt
         if isinstance(prompt, int):
             prompt = self.prompts[prompt]
+
         inputs: dict = self.transform(img, prompt=apply_chat_template(prompt))
         for key in inputs.keys():
             inputs[key] = inputs[key].squeeze(0)
 
         inputs["labels"] = inputs["input_ids"].clone()
-        inputs["id"] = item["id"]
+        inputs["id"] = item.id
         inputs.update(self.trainer_input_kwargs)
         # pretty_print(inputs)
+
         return inputs
 
 

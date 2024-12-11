@@ -13,3 +13,4 @@ peft
 diffusers
 omegaconf
 typer
+dataclasses-json
