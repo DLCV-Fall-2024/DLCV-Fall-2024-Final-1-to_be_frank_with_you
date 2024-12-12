@@ -13,3 +13,4 @@ class SegmentationEncoder(VisionEncoder):
         processor: Optional[AutoImageProcessor] = None,
     ):
         super().__init__(model_id, model, processor)
+    def forward( self, pixel_values: torch.Tensor, **kwargs ):
