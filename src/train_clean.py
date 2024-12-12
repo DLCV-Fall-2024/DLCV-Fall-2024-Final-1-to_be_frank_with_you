@@ -5,21 +5,23 @@ app = typer.Typer(pretty_exceptions_show_locals=False)
 
 @app.command()
 def main(name: str = typer.Argument(..., help="Name of the experiment")):
+    from src.arguments.dataclass import Config
+    from src.utils.experiment import load_config
+
+    config, timestamp, output_dir, checkpoint_dir, log_dir = load_config(name, Config)
+    if config is None:
+        print("Configuration created")
+        return
 
     from tqdm import tqdm
     from pathlib import Path
     from omegaconf import OmegaConf
 
     import torch
-    import torch.distributed as dist
     from torch.utils.data import DataLoader
     from pytorch_lightning import seed_everything
 
-    import transformers
-    from transformers import DepthAnythingForDepthEstimation
-
-    from src.arguments.dataclass import Config
-    from src.utils.experiment import load_config, dump_additional_config
+    from src.utils.experiment import dump_additional_config
     from src.models.llava import LlavaPEFT
 
     from utils import default
@@ -29,13 +31,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
         Timer,
         init_logger,
         init_wandb,
-        pretty_print,
     )
-
-    config, timestamp, output_dir, checkpoint_dir, log_dir = load_config(name, Config)
-    if config is None:
-        print("Configuration created")
-        return
 
     addition_config = {}
     mp = config.model

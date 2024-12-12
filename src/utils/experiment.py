@@ -9,7 +9,7 @@ from omegaconf import OmegaConf
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 
 
-def create_config(root: Path, exp_name: str, default_config: Any) -> Tuple[bool, str]:
+def create_config(root: Path, exp_name: str, default_config: Any) -> Tuple[bool, Path]:
     configs_dir = root / "configs"
     config_path = configs_dir / f"{exp_name}.yaml"
     configs_dir.mkdir(parents=True, exist_ok=True)
@@ -19,10 +19,10 @@ def create_config(root: Path, exp_name: str, default_config: Any) -> Tuple[bool,
         with config_path.open("w") as config_file:
             OmegaConf.save(default_config, config_file)
 
-    return not config_exists, str(config_path)
+    return not config_exists, config_path
 
 
-def create_assets(root: Path, exp_name: str) -> Tuple[str, str, str]:
+def create_assets(root: Path, exp_name: str) -> Tuple[Path, Path, Path]:
     output_dir = root / "outputs" / exp_name
     checkpoint_dir = output_dir / "checkpoint"
     log_dir = output_dir / "log"
@@ -31,7 +31,7 @@ def create_assets(root: Path, exp_name: str) -> Tuple[str, str, str]:
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    return str(output_dir), str(checkpoint_dir), str(log_dir)
+    return output_dir, checkpoint_dir, log_dir
 
 
 C = TypeVar("C")
@@ -40,8 +40,8 @@ C = TypeVar("C")
 def load_config(
     name: str,
     Config: Type[C],
-    config_path: Optional[str] = None,
-) -> Tuple[Optional[C], str, str, str]:
+    config_path: Optional[Path | str] = None,
+) -> Tuple[Optional[C], Path, Path, Path, Path]:
     # Initialize default configuration
     default_config = OmegaConf.structured(Config)
 
