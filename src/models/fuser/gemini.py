@@ -88,7 +88,13 @@ class GeminiSinglePair(nn.Module):
 
 class GeminiFuser(Fuser):
     def __init__(
-        self, n_auxiliary_features: int, d_model=768, num_heads=8, mlp_hidden_dim=512
+        self,
+        n_auxiliary_features: int,
+        d_model=768,
+        num_heads=8,
+        mlp_hidden_dim=512,
+        conditional_fuser=False,
+        **kwargs,
     ):
         super().__init__(n_auxiliary_features=n_auxiliary_features)
 
@@ -100,14 +106,20 @@ class GeminiFuser(Fuser):
                 for _ in range(self.n_auxiliary_features)
             ]
         )
+        self.conditional_fuser = conditional_fuser
 
     def forward(
-        self, image_feature: torch.Tensor, auxiliary_features: List[torch.Tensor]
+        self,
+        image_feature: torch.Tensor,
+        auxiliary_features: List[torch.Tensor],
     ) -> torch.Tensor:
         fused_features = []
         for i, fuser in enumerate(self.fusers):
             fused_features.append(fuser(image_feature, auxiliary_features[i]))
 
+        if self.conditional_fuser:
+            # Return all fused features to be conditioned on text input
+            return fused_features
         fusion = 0
         for fused_feature in fused_features:
             fusion += fused_feature

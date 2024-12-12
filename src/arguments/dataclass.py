@@ -17,6 +17,7 @@ class ModelParams:
     segmentation_model_id: str = "shi-labs/oneformer_ade20k_dinat_large"
 
     fuser_id: str = "gemini"
+    conditional_fuser: bool = True
 
     patch_size: int = 14
     vision_feature_select_strategy: str = "full"  # "default" or "full"
@@ -69,7 +70,7 @@ class Config:
     run_name: Optional[str] = None
 
     seed: int = 42
-    local_rank: Union[int, List[int]] = os.getenv("LOCAL_RANK", -1)
+    local_rank: int = os.getenv("LOCAL_RANK", -1)
     liger_kernel: bool = True
 
     model: ModelParams = field(default_factory=ModelParams)

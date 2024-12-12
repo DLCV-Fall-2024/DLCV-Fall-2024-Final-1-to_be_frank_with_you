@@ -1,6 +1,11 @@
+import os
+from pathlib import Path
+
 import typer
 
 app = typer.Typer(pretty_exceptions_show_locals=False)
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 @app.command()
@@ -13,14 +18,15 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
         print("Configuration created")
         return
 
-    from pathlib import Path
-
     import torch
     from liger_kernel.transformers import apply_liger_kernel_to_llama
     from omegaconf import OmegaConf
     from pytorch_lightning import seed_everything
     from torch.utils.data import DataLoader
     from tqdm import tqdm
+    from transformers.utils import logging
+
+    logging.set_verbosity_error()
 
     from src.models.llava import LlavaPEFT
     from src.utils.experiment import dump_additional_config
@@ -48,6 +54,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
         model_params=mp,
         gradient_checkpointing=not use_cache,
         lora_config=mp.lora_config,
+        conditional_fuser=getattr(mp, "conditional_fuser", False),
     )
     addition_config["model_struct"] = model.get_model_struct()
 
@@ -206,9 +213,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
                     inputs = transform(batch["image"], prompt=batch["prompt"]).to(
                         device
                     )
-                    labels = processor.tokenizer(
-                        batch["labels"], return_tensors="pt", padding=True
-                    ).input_ids.to(device)
+                    labels = inputs["input_ids"].clone()
                     DEBUG.stamp()
                     DEBUG.set_params(**{"labels": labels})
 

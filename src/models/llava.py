@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional
 
 import torch
+import torch.nn as nn
 from peft import LoraConfig, get_peft_model
 from PIL.Image import Image
 from transformers import (
@@ -15,6 +16,7 @@ from utils import default
 
 from .encoder import DepthEncoder, SegmentationEncoder, VisionEncoder
 from .fuser import FUSERS
+from .utils import AdaLNZero
 
 
 # TODO: Not tested
@@ -44,7 +46,14 @@ class MergedImageProcessor(BaseImageProcessor):
 
 
 class VisionTower(torch.nn.Module):
-    def __init__(self, model_params: ModelParams, vision_feature_layer: int):
+
+    def __init__(
+        self,
+        model_params: ModelParams,
+        vision_feature_layer: int,
+        conditional_fuser: bool = False,
+        language_embeds_dim: int = 768,
+    ):
         super().__init__()
 
         self.encoder = VisionEncoder(model_params.encoder_id)
@@ -74,14 +83,24 @@ class VisionTower(torch.nn.Module):
         self.fuser = FUSERS[model_params.fuser_id](
             n_auxiliary_features=self.n_auxiliary_features,
             d_model=self.encoder.model.config.hidden_size,
+            conditional_fuser=conditional_fuser,
             # num_heads=self.encoder.model.config.num_attention_heads,
             # mlp_hidden_dim=self.encoder.model.config.mlp_hidden_dim,
         )
+        self.conditional_fuser = conditional_fuser
+        if self.conditional_fuser:
+            self.AdaLNZero = AdaLNZero(
+                hidden_dim=self.encoder.model.config.hidden_size,
+                condition_dim=language_embeds_dim,
+            )
 
         # Create merged image processor
         self.processor = MergedImageProcessor(self.processors)
 
     def forward(self, pixel_values: torch.Tensor, **kwargs):
+        if self.conditional_fuser:
+            pixel_values, language_embeds = pixel_values
+
         feature = self.encoder(pixel_values[0], **kwargs)
         image_feature = feature.hidden_states[self.vision_feature_layer]
 
@@ -95,7 +114,15 @@ class VisionTower(torch.nn.Module):
                     feature.hidden_states[self.vision_feature_layer]
                 )
             # Residual connection
-            out_feature = image_feature + self.fuser(image_feature, auxiliary_features)
+            fused_features = self.fuser(image_feature, auxiliary_features)
+            if self.conditional_fuser:
+
+                fused_features = self.AdaLNZero(
+                    torch.cat(fused_features, dim=1),
+                    language_embeds,
+                )
+
+            out_feature = image_feature + fused_features
         else:
             out_feature = image_feature
 
@@ -111,6 +138,7 @@ class LlavaPEFT(torch.nn.Module):
         model_params: ModelParams,
         gradient_checkpointing: bool,
         lora_config: Dict[str, Any],
+        conditional_fuser: bool = False,
     ):
         super().__init__()
 
@@ -119,9 +147,18 @@ class LlavaPEFT(torch.nn.Module):
             self.model_id,
             torch_dtype=torch.bfloat16,
         )
+
         # Change the vision tower to the encoder
         vision_feature_layer = default(llava.config.vision_feature_layer, -2)
-        self.vision_tower = VisionTower(model_params, vision_feature_layer)
+        self.conditional_fuser = conditional_fuser
+        language_embeds_dim = llava.get_input_embeddings().weight.shape[1]
+
+        self.vision_tower = VisionTower(
+            model_params,
+            vision_feature_layer,
+            conditional_fuser=conditional_fuser,
+            language_embeds_dim=language_embeds_dim,
+        )
         llava.vision_tower = self.vision_tower
 
         # Update vision related config
@@ -136,7 +173,11 @@ class LlavaPEFT(torch.nn.Module):
         llava.config.image_seq_length = image_seq_length
 
         # Remove projector layers from lora for direct finetuning
-        no_lora_but_FF_prefix = ["multi_modal_projector", "fuser"]
+        no_lora_but_FF_prefix = [
+            "multi_modal_projector",
+            "fuser",
+            "vision_tower.AdaLNZero",
+        ]
         model_params.lora_config["target_modules"] = [
             layer
             for layer in model_params.lora_config["target_modules"]
@@ -155,7 +196,7 @@ class LlavaPEFT(torch.nn.Module):
 
         # Activate finetuning the encoder
         for name, param in llava.named_parameters():
-            if any([name.startswith(prefix) for prefix in no_lora_but_FF_prefix]):
+            if any([prefix in name for prefix in no_lora_but_FF_prefix]):
                 param.requires_grad = True
 
         processor: LlavaProcessor = LlavaProcessor.from_pretrained(
@@ -200,7 +241,7 @@ class LlavaPEFT(torch.nn.Module):
         self,
         pixel_values: torch.Tensor,
         aux_pixel_values: Optional[torch.Tensor],
-        **inputs
+        **inputs,
     ):
         if aux_pixel_values is not None:
             merged_pixel_values = torch.cat(
@@ -210,4 +251,11 @@ class LlavaPEFT(torch.nn.Module):
         else:
             inputs["pixel_values"] = pixel_values.unsqueeze(0)
 
+        if self.conditional_fuser:
+            language_embeds = self.llava.base_model.get_input_embeddings()(
+                inputs["input_ids"]
+            )
+
+            language_embeds = language_embeds.mean(dim=1)
+            inputs["pixel_values"] = (inputs["pixel_values"], language_embeds)
         return self.llava(**inputs)
