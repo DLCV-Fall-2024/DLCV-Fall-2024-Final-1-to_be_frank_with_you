@@ -8,6 +8,8 @@ class ModelParams:
     device: str = "cuda"
 
     model_id: str = "llava-hf/llava-1.5-7b-hf"
+
+    change_encoder: bool = False
     encoder_id: str = "facebook/dinov2-large"
 
     share_vit: bool = False

@@ -119,21 +119,34 @@ class LlavaPEFT(torch.nn.Module):
             self.model_id,
             torch_dtype=torch.bfloat16,
         )
-        # Change the vision tower to the encoder
-        vision_feature_layer = default(llava.config.vision_feature_layer, -2)
-        self.vision_tower = VisionTower(model_params, vision_feature_layer)
-        llava.vision_tower = self.vision_tower
-
-        # Update vision related config
-        encoder_config = self.vision_tower.encoder.model.config
-        llava.config.vision_config = encoder_config
-
-        image_size = self.vision_tower.encoder.processor.crop_size
-        patch_size = self.vision_tower.encoder.model.config.patch_size
-        image_seq_length = (image_size["height"] // patch_size) * (
-            image_size["width"] // patch_size
+        processor: LlavaProcessor = LlavaProcessor.from_pretrained(
+            model_params.model_id
         )
-        llava.config.image_seq_length = image_seq_length
+
+        processor.patch_size = model_params.patch_size
+        processor.vision_feature_select_strategy = (
+            model_params.vision_feature_select_strategy
+        )
+        self.processor = processor
+
+        if model_params.change_encoder:
+            # Change the vision tower to the encoder
+            vision_feature_layer = default(llava.config.vision_feature_layer, -2)
+            self.vision_tower = VisionTower(model_params, vision_feature_layer)
+
+            llava.vision_tower = self.vision_tower
+            processor.image_processor = self.vision_tower.encoder.processor
+
+            # Update vision related config
+            encoder_config = self.vision_tower.encoder.model.config
+            llava.config.vision_config = encoder_config
+
+            image_size = self.vision_tower.encoder.processor.crop_size
+            patch_size = self.vision_tower.encoder.model.config.patch_size
+            image_seq_length = (image_size["height"] // patch_size) * (
+                image_size["width"] // patch_size
+            )
+            llava.config.image_seq_length = image_seq_length
 
         # Remove projector layers from lora for direct finetuning
         no_lora_but_FF_prefix = ["multi_modal_projector", "fuser"]
@@ -158,15 +171,8 @@ class LlavaPEFT(torch.nn.Module):
             if any([name.startswith(prefix) for prefix in no_lora_but_FF_prefix]):
                 param.requires_grad = True
 
-        processor: LlavaProcessor = LlavaProcessor.from_pretrained(
-            model_params.model_id
-        )
-        processor.image_processor = self.vision_tower.encoder.processor
-        processor.patch_size = model_params.patch_size
-        processor.vision_feature_select_strategy = (
-            model_params.vision_feature_select_strategy
-        )
-        self.processor = processor
+        self.mp = model_params
+
 
     def get_model_struct(self):
         return str(self.llava)
@@ -184,30 +190,32 @@ class LlavaPEFT(torch.nn.Module):
             do_rescale=False,  # since we already rescale color range to [0, 1] when loading dataset
         )
 
-        image_inputs = self.vision_tower.processor(
-            img,
-            return_tensors="pt",  # return as pytorch tensors
-            padding=True,
-            do_rescale=False,  # since we already rescale color range to [0, 1] when loading dataset)
-        )
+        if self.mp.change_encoder:
+            image_inputs = self.vision_tower.processor(
+                img,
+                return_tensors="pt",  # return as pytorch tensors
+                padding=True,
+                do_rescale=False,  # since we already rescale color range to [0, 1] when loading dataset)
+            )
 
-        inputs["pixel_values"] = image_inputs["pixel_values"]
-        inputs["aux_pixel_values"] = image_inputs["aux_pixel_values"]
+            inputs["pixel_values"] = image_inputs["pixel_values"]
+            inputs["aux_pixel_values"] = image_inputs["aux_pixel_values"]
 
         return inputs
 
     def forward(
         self,
         pixel_values: torch.Tensor,
-        aux_pixel_values: Optional[torch.Tensor],
+        aux_pixel_values: Optional[torch.Tensor] = None,
         **inputs
     ):
-        if aux_pixel_values is not None:
-            merged_pixel_values = torch.cat(
-                [pixel_values.unsqueeze(0), aux_pixel_values], dim=0
-            )
-            inputs["pixel_values"] = merged_pixel_values
-        else:
-            inputs["pixel_values"] = pixel_values.unsqueeze(0)
+        if self.mp.change_encoder:
+            if aux_pixel_values is not None:
+                merged_pixel_values = torch.cat(
+                    [pixel_values.unsqueeze(0), aux_pixel_values], dim=0
+                )
+                inputs["pixel_values"] = merged_pixel_values
+            else:
+                inputs["pixel_values"] = pixel_values.unsqueeze(0)
 
         return self.llava(**inputs)
