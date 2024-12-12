@@ -129,6 +129,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
             config=OmegaConf.to_container(config, resolve=True),
             log_dir=log_dir,
             local_rank=local_rank if __USE_DEEPSPEED__ else None,
+            entity="DLCV-Final",
         )
     logger = init_logger(local_rank=local_rank if __USE_DEEPSPEED__ else None)
     print(type(logger))
