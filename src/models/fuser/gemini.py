@@ -13,7 +13,6 @@ class GeminiSinglePair(nn.Module):
 
         # Define shared layers for Q, K, V
         self.qkv = nn.Linear(d_model, 3 * d_model)  # Shared Q, K, V projection
-
         # MLP for combining k_img and k_depth
         self.mlp = nn.Sequential(
             nn.Linear(2 * d_model, mlp_hidden_dim),  # First layer
@@ -23,7 +22,6 @@ class GeminiSinglePair(nn.Module):
 
         # Multi-head attention layers
         self.attn = nn.MultiheadAttention(d_model, num_heads)
-
         # Layer normalization
         self.norm = nn.LayerNorm(d_model)
 
@@ -63,15 +61,6 @@ class GeminiSinglePair(nn.Module):
         )  # Combine keys using MLP
         k_combined_depth = F.softmax(k_combined_depth, dim=-1)  # Apply softmax
 
-        # Transpose for multihead attention (Shape: [seq_len, batch_size, d_model])
-        # q_img = q_img.transpose(0, 1)
-        # k_img = k_img.transpose(0, 1)
-        # v_img = v_img.transpose(0, 1)
-
-        # q_depth = q_depth.transpose(0, 1)
-        # k_depth = k_depth.transpose(0, 1)
-        # v_depth = v_depth.transpose(0, 1)
-
         # First embedding: Attention on Image tokens + Joint attention (Image + Depth)
         attn_img, _ = self.attn(q_img, k_img, v_img)  # Attention using image tokens
         attn_joint_img_depth, _ = self.attn(
@@ -98,7 +87,6 @@ class GeminiSinglePair(nn.Module):
 
 
 class GeminiFuser(Fuser):
-    # TODO: Use model params configs
     def __init__(
         self, n_auxiliary_features: int, d_model=768, num_heads=8, mlp_hidden_dim=512
     ):

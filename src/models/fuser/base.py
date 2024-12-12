@@ -13,4 +13,4 @@ class Fuser(nn.Module):
     def forward(
         self, image_feature: torch.Tensor, auxiliary_features: List[torch.Tensor]
     ) -> torch.Tensor:
-        pass
+        raise NotImplementedError

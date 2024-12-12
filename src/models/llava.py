@@ -94,13 +94,14 @@ class VisionTower(torch.nn.Module):
                 auxiliary_features.append(
                     feature.hidden_states[self.vision_feature_layer]
                 )
-            out_feature = self.fuser(image_feature, auxiliary_features)
+            # Residual connection
+            out_feature = image_feature + self.fuser(image_feature, auxiliary_features)
         else:
             out_feature = image_feature
 
         return BaseModelOutputWithPooling(
-            # vision_feature_layer is -2 in Llava, so we need to add it to the output
-            hidden_states=[out_feature, out_feature]
+            # vision_feature_layer is -2 in Llava, so we need to add placeholder for the output
+            hidden_states=[out_feature, None]
         )
 
 
@@ -192,7 +193,6 @@ class LlavaPEFT(torch.nn.Module):
 
         inputs["pixel_values"] = image_inputs["pixel_values"]
         inputs["aux_pixel_values"] = image_inputs["aux_pixel_values"]
-        # inputs["aux_pixel_values"] = None
 
         return inputs
 
@@ -202,7 +202,6 @@ class LlavaPEFT(torch.nn.Module):
         aux_pixel_values: Optional[torch.Tensor],
         **inputs
     ):
-        # WARNING: Not sure if this concat is fine
         if aux_pixel_values is not None:
             merged_pixel_values = torch.cat(
                 [pixel_values.unsqueeze(0), aux_pixel_values], dim=0
