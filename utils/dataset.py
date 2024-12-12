@@ -198,7 +198,7 @@ def preprocess_dataset(
     if (cache_dir / "statistics.json").exists():
         statistics = json.load(open(cache_dir / "statistics.json", "r"))
     for s in split:
-        raw_dataset = load_dataset("ntudlcv/dlcv_2024_final1", split=s)
+        raw_dataset = load_dataset("ntudlcv/dlcv_2024_final1", split=s, streaming=True)
 
         save_dir = cache_dir / s
         (save_dir / "images").mkdir(exist_ok=True, parents=True)
