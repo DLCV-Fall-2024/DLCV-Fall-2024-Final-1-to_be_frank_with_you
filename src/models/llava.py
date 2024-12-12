@@ -1,18 +1,19 @@
 from typing import Any, Dict, List, Optional
 
 import torch
+from peft import LoraConfig, get_peft_model
 from PIL.Image import Image
 from transformers import (
+    BaseImageProcessor,
     LlavaForConditionalGeneration,
     LlavaProcessor,
-    BaseImageProcessor,
 )
 from transformers.modeling_outputs import BaseModelOutputWithPooling
-from peft import LoraConfig, get_peft_model
 
-from utils import default
 from src.arguments.dataclass import ModelParams
-from .encoder import VisionEncoder, DepthEncoder, SegmentationEncoder
+from utils import default
+
+from .encoder import DepthEncoder, SegmentationEncoder, VisionEncoder
 from .fuser import FUSERS
 
 
@@ -128,7 +129,9 @@ class LlavaPEFT(torch.nn.Module):
 
         image_size = self.vision_tower.encoder.processor.crop_size
         patch_size = self.vision_tower.encoder.model.config.patch_size
-        image_seq_length = (image_size["height"] // patch_size) * (image_size["width"] // patch_size)
+        image_seq_length = (image_size["height"] // patch_size) * (
+            image_size["width"] // patch_size
+        )
         llava.config.image_seq_length = image_seq_length
 
         # Remove projector layers from lora for direct finetuning
@@ -151,7 +154,7 @@ class LlavaPEFT(torch.nn.Module):
 
         # Activate finetuning the encoder
         for name, param in llava.named_parameters():
-            if any([prefix in name for prefix in no_lora_but_FF_prefix]):
+            if any([name.startswith(prefix) for prefix in no_lora_but_FF_prefix]):
                 param.requires_grad = True
 
         processor: LlavaProcessor = LlavaProcessor.from_pretrained(
@@ -194,7 +197,10 @@ class LlavaPEFT(torch.nn.Module):
         return inputs
 
     def forward(
-        self, pixel_values: torch.Tensor, aux_pixel_values: Optional[torch.Tensor], **inputs
+        self,
+        pixel_values: torch.Tensor,
+        aux_pixel_values: Optional[torch.Tensor],
+        **inputs
     ):
         # WARNING: Not sure if this concat is fine
         if aux_pixel_values is not None:

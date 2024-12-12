@@ -13,25 +13,19 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
         print("Configuration created")
         return
 
-    from tqdm import tqdm
     from pathlib import Path
-    from omegaconf import OmegaConf
 
     import torch
-    from torch.utils.data import DataLoader
+    from omegaconf import OmegaConf
     from pytorch_lightning import seed_everything
+    from torch.utils.data import DataLoader
+    from tqdm import tqdm
 
-    from src.utils.experiment import dump_additional_config
     from src.models.llava import LlavaPEFT
-
+    from src.utils.experiment import dump_additional_config
     from utils import default
     from utils.dataset import DiscDataset
-    from utils.log import (
-        PerformanceMonitor,
-        Timer,
-        init_logger,
-        init_wandb,
-    )
+    from utils.log import PerformanceMonitor, Timer, init_logger, init_wandb
 
     addition_config = {}
     mp = config.model
@@ -127,9 +121,9 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
             local_rank=local_rank if __USE_DEEPSPEED__ else None,
         )
     logger = init_logger(local_rank=local_rank if __USE_DEEPSPEED__ else None)
-
+    print(type(logger))
     epochs = op.epochs
-    timer = Timer(10)  # 10 minutes
+    timer = Timer(10 * 60)  # 10 minutes
     DEBUG = PerformanceMonitor(pp.debug)
     global_step = 0
     accum_loss = 0

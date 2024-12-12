@@ -16,6 +16,7 @@ __WANDB_ENABLED__ = False
 
 
 def init_wandb(project_name, run_name, config, log_dir=None, local_rank=None, **kwargs):
+    global __WANDB_ENABLED__
     if not __WANDB_AVAILABLE__ or (isinstance(local_rank, int) and local_rank != 0):
         return
     wandb.init(
@@ -24,6 +25,7 @@ def init_wandb(project_name, run_name, config, log_dir=None, local_rank=None, **
     wandb.config.update(config)
 
     __WANDB_ENABLED__ = True
+    print("========= Wandb initialized =========")
 
 
 def init_logger(verbose=True, local_rank=None):
@@ -90,6 +92,10 @@ def get_caller_info(depth=2):
 
 class Timer:
     def __init__(self, limit=0):
+        """
+        Timer class to track elapsed time.
+        :param limit: Time limit in seconds. If set, `timesup` will return True when elapsed time exceeds the limit.
+        """
         self.limit = limit
         self.start_time = None
         self.end_time = None
