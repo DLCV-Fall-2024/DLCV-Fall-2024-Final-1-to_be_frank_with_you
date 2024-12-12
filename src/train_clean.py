@@ -141,10 +141,10 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
         if not (param.requires_grad == ("lora" in name)):
             print(f"Warning: {name}.required_grad= {param.requires_grad}.")
 
-    # model.to(device)
+    model.to(device)
 
     for epoch in range(epochs):
-        # model.train()
+        model.train()
 
         train_bar = tqdm(train_loader)
         train_bar.set_description(f"[Train {epoch}/{epochs}]")
