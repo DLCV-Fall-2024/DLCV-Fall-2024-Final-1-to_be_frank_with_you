@@ -16,6 +16,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     from pathlib import Path
 
     import torch
+    from liger_kernel.transformers import apply_liger_kernel_to_llama
     from omegaconf import OmegaConf
     from pytorch_lightning import seed_everything
     from torch.utils.data import DataLoader
@@ -36,6 +37,8 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     seed_everything(config.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    if config.liger_kernel:
+        apply_liger_kernel_to_llama()
     ### DeepSpeed Compatibility ###
     __USE_DEEPSPEED__ = False
     local_rank = -1

@@ -1,6 +1,6 @@
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import List, Optional, Union
 
 
 @dataclass
@@ -69,7 +69,8 @@ class Config:
     run_name: Optional[str] = None
 
     seed: int = 42
-    lora_rank: int = os.getenv("LOCAL_RANK", -1)
+    local_rank: Union[int, List[int]] = os.getenv("LOCAL_RANK", -1)
+    liger_kernel: bool = True
 
     model: ModelParams = field(default_factory=ModelParams)
     pipeline: PipelineParams = field(default_factory=PipelineParams)
