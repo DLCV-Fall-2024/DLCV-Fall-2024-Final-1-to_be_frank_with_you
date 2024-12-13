@@ -1,0 +1,43 @@
+project_name: null
+run_name: null
+seed: 42
+model:
+  device: cuda
+  model_id: llava-hf/llava-1.5-7b-hf
+  encoder_id: facebook/dinov2-large
+  share_vit: false
+  use_depth: false
+  depth_model_id: depth-anything/Depth-Anything-V2-Small-hf
+  use_segmentation: false
+  segmentation_model_id: shi-labs/oneformer_ade20k_dinat_large
+  fuser_id: gemini
+  patch_size: 14
+  vision_feature_select_strategy: full
+  gradient_checkpointing: true
+  lora_config:
+    r: 16
+    lora_alpha: 32
+    target_modules:
+    - q_proj
+    - v_proj
+    - multi_modal_projector.linear_1
+    - multi_modal_projector.linear_2
+    exclude_modules: vision_tower.*
+    lora_dropout: 0.1
+    use_dora: true
+    bias: none
+    task_type: CAUSAL_LM
+pipeline:
+  wandb: true
+  debug: false
+dataset:
+  dataset_path: data
+  seed: 42
+  num_workers: 10
+  prefetch_factor: 2
+optimization:
+  epochs: 1
+  lr: 3.0e-05
+  batch_size: 4
+  optimizer_type: default
+  accumulation_steps: 4

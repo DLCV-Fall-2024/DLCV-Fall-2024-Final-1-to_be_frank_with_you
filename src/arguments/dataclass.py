@@ -11,9 +11,9 @@ class ModelParams:
     encoder_id: str = "facebook/dinov2-large"
 
     share_vit: bool = False
-    use_depth: bool = False
+    use_depth: bool = True
     depth_model_id: str = "depth-anything/Depth-Anything-V2-Small-hf"
-    use_segmentation: bool = False
+    use_segmentation: bool = True
     segmentation_model_id: str = "shi-labs/oneformer_ade20k_dinat_large"
 
     fuser_id: str = "gemini"
@@ -24,7 +24,7 @@ class ModelParams:
     gradient_checkpointing: bool = True
     lora_config: dict = field(
         default_factory=lambda: {
-            "r": 16,
+            "r": 32,
             "lora_alpha": 32,
             "target_modules": [
                 "q_proj",
@@ -62,6 +62,7 @@ class OptimizationParams:
     batch_size: int = 4
     optimizer_type: str = "default"
     accumulation_steps: int = 4
+    gradient_clip_val: float = 1.0
 
 
 @dataclass

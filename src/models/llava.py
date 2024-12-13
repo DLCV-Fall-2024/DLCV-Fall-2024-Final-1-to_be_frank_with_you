@@ -1,4 +1,6 @@
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from functools import partial
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -12,36 +14,51 @@ from transformers import (
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 
 from src.arguments.dataclass import ModelParams
-from utils import default
+from utils import default, print_once
 
-from .encoder import DepthEncoder, SegmentationEncoder, VisionEncoder
+from .encoder import (
+    DepthEncoder,
+    ImageEncoderOutput,
+    SegmentationEncoder,
+    VisionEncoder,
+)
 from .fuser import FUSERS
-from .utils import AdaLNZero
+from .utils import AdaLNZero, ensure_all_on_device, ensure_all_same_dtype
 
 
 # TODO: Not tested
 class MergedImageProcessor(BaseImageProcessor):
-    def __init__(self, processors: List[BaseImageProcessor]):
+
+    def __init__(
+        self,
+        processors: List[BaseImageProcessor],
+        torch_dtype: torch.dtype = torch.bfloat16,
+        device: torch.device = torch.device("cpu"),
+    ):
         super().__init__()
 
         self.processors = processors
         self.n_processors = len(processors)
 
+        self.device = device
+        self.torch_dtype = torch_dtype
+
     def preprocess(self, images, **kwargs):
+        if "padding" in kwargs:
+            del kwargs["padding"]
         inputs = self.processors[0](images, **kwargs)
         image_shape = inputs["pixel_values"].shape
-
-        auxiliary_pixel_values = []
-        for processor in self.processors[1:]:
-            pixel_values = processor(images, **kwargs)["pixel_values"]
-            assert (
-                pixel_values.shape == image_shape
-            ), "All auxiliary encoders must output the same shape as the main encoder"
-            auxiliary_pixel_values.append(pixel_values.unsqueeze(0))
-
-        inputs["aux_pixel_values"] = (
-            torch.cat(auxiliary_pixel_values, dim=0) if self.n_processors > 1 else None
+        inputs["pixel_values"] = inputs["pixel_values"].to(
+            self.device, self.torch_dtype
         )
+        auxiliary_inputs = []
+        for processor in self.processors[1:]:
+            aux_inputs = processor(images, **kwargs)
+            aux_inputs.to(self.device, self.torch_dtype)
+            auxiliary_inputs.append(aux_inputs)
+
+        inputs["aux_inputs"] = auxiliary_inputs
+
         return inputs
 
 
@@ -53,6 +70,9 @@ class VisionTower(torch.nn.Module):
         vision_feature_layer: int,
         conditional_fuser: bool = False,
         language_embeds_dim: int = 768,
+        segment_type: str = "semantic",  # ["semantic", "instance", "panoptic"]
+        torch_dtype: torch.dtype = torch.bfloat16,
+        device: torch.device = torch.device("cpu"),
     ):
         super().__init__()
 
@@ -67,17 +87,53 @@ class VisionTower(torch.nn.Module):
             vit = self.encoder.model
             processor = self.encoder.processor
 
-        self.auxiliary_encoders = []
+        self.auxiliary_encoders = torch.nn.ModuleList()
+        self.auxiliary_projectors = torch.nn.ModuleList()
         if model_params.use_depth:
-            depth_encoder = DepthEncoder(model_params.depth_model_id, vit, processor)
+            depth_encoder = DepthEncoder(
+                model_params.depth_model_id,
+                vit,
+                processor,
+                vision_feature_layer,
+                device=device,
+                torch_dtype=torch_dtype,
+            )
             self.auxiliary_encoders.append(depth_encoder)
-            self.processors.append(depth_encoder.processor)
+            self.auxiliary_projectors.append(
+                nn.Linear(
+                    depth_encoder.hidden_states_dim,
+                    self.encoder.hidden_states_dim,
+                    device=device,
+                    dtype=torch_dtype,
+                )
+            )
+            self.processors.append(
+                self.processors[0]
+            )  # Use the main processor for depth encoder
+            # self.processors.append(depth_encoder.processor)
         if model_params.use_segmentation:
             segmentation_encoder = SegmentationEncoder(
-                model_params.segmentation_model_id, vit, processor
+                model_params.segmentation_model_id,
+                vit,
+                processor,
+                vision_feature_layer,
+                device=device,
+                torch_dtype=torch_dtype,
             )
             self.auxiliary_encoders.append(segmentation_encoder)
-            self.processors.append(segmentation_encoder.processor)
+
+            self.auxiliary_projectors.append(
+                nn.Linear(
+                    depth_encoder.hidden_states_dim,
+                    self.encoder.hidden_states_dim,
+                    device=device,
+                    dtype=torch_dtype,
+                )
+            )
+
+            self.processors.append(
+                partial(segmentation_encoder.processor, task_inputs=[segment_type])
+            )
 
         self.n_auxiliary_features = len(self.auxiliary_encoders)
         self.fuser = FUSERS[model_params.fuser_id](
@@ -86,41 +142,61 @@ class VisionTower(torch.nn.Module):
             conditional_fuser=conditional_fuser,
             # num_heads=self.encoder.model.config.num_attention_heads,
             # mlp_hidden_dim=self.encoder.model.config.mlp_hidden_dim,
-        )
+        ).to(device, torch_dtype)
+
         self.conditional_fuser = conditional_fuser
         if self.conditional_fuser:
             self.AdaLNZero = AdaLNZero(
                 hidden_dim=self.encoder.model.config.hidden_size,
                 condition_dim=language_embeds_dim,
-            )
+            ).to(device, torch_dtype)
 
         # Create merged image processor
-        self.processor = MergedImageProcessor(self.processors)
+        self.processor = MergedImageProcessor(
+            self.processors, torch_dtype=torch_dtype, device=device
+        )
 
     def forward(self, pixel_values: torch.Tensor, **kwargs):
         if self.conditional_fuser:
             pixel_values, language_embeds = pixel_values
 
-        feature = self.encoder(pixel_values[0], **kwargs)
+        feature: ImageEncoderOutput = self.encoder(pixel_values[0], **kwargs)
         image_feature = feature.hidden_states[self.vision_feature_layer]
-
+        main_dim = tuple(image_feature.shape)
         auxiliary_features = []
         if self.n_auxiliary_features > 0:
             for i, encoder in enumerate(self.auxiliary_encoders):
-                images = encoder(pixel_values[i + 1], **kwargs)
-                feature = self.encoder(images, **kwargs)
-                # feature = encoder(pixel_values[i + 1], **kwargs)
-                auxiliary_features.append(
-                    feature.hidden_states[self.vision_feature_layer]
+                feature: ImageEncoderOutput = encoder(**pixel_values[i + 1], **kwargs)
+
+                if feature.use_pred:
+                    preprocess = self.processors[0](
+                        feature.predictions.to(torch.float32),
+                        return_tensors="pt",  # return as pytorch tensors
+                    )
+                    preprocess = preprocess.to(
+                        image_feature.device, image_feature.dtype
+                    )
+                    encoded = self.encoder(preprocess["pixel_values"], **kwargs)
+                    wanted_feature = encoded.hidden_states[self.vision_feature_layer]
+                else:
+                    wanted_feature = feature.hidden_states[self.vision_feature_layer]
+                    wanted_feature = self.auxiliary_projectors[i](wanted_feature)
+                assert (
+                    tuple(wanted_feature.shape) == main_dim
+                ), "All auxiliary encoders must output the same shape as the main encoder, but got {} and {}".format(
+                    wanted_feature.shape, main_dim
                 )
+                auxiliary_features.append(wanted_feature)
             # Residual connection
             fused_features = self.fuser(image_feature, auxiliary_features)
             if self.conditional_fuser:
 
-                fused_features = self.AdaLNZero(
+                fused_features: torch.Tensor = self.AdaLNZero(
                     torch.cat(fused_features, dim=1),
                     language_embeds,
                 )
+                adjust_feature = fused_features.chunk(self.n_auxiliary_features, dim=1)
+                fused_features = torch.stack(adjust_feature, dim=0).mean(dim=0)
 
             out_feature = image_feature + fused_features
         else:
@@ -139,13 +215,15 @@ class LlavaPEFT(torch.nn.Module):
         gradient_checkpointing: bool,
         lora_config: Dict[str, Any],
         conditional_fuser: bool = False,
+        device: torch.device = torch.device("cpu"),
+        torch_dtype: torch.dtype = torch.bfloat16,
     ):
         super().__init__()
 
         self.model_id = model_params.model_id
         llava = LlavaForConditionalGeneration.from_pretrained(
             self.model_id,
-            torch_dtype=torch.bfloat16,
+            torch_dtype=torch_dtype,
         )
 
         # Change the vision tower to the encoder
@@ -158,6 +236,8 @@ class LlavaPEFT(torch.nn.Module):
             vision_feature_layer,
             conditional_fuser=conditional_fuser,
             language_embeds_dim=language_embeds_dim,
+            torch_dtype=torch_dtype,
+            device=device,
         )
         llava.vision_tower = self.vision_tower
 
@@ -177,12 +257,17 @@ class LlavaPEFT(torch.nn.Module):
             "multi_modal_projector",
             "fuser",
             "vision_tower.AdaLNZero",
+            "auxiliary_projectors",
         ]
         model_params.lora_config["target_modules"] = [
             layer
             for layer in model_params.lora_config["target_modules"]
             if not any([prefix in layer for prefix in no_lora_but_FF_prefix])
         ]
+
+        # These should be apply before apply PEFT
+        ensure_all_same_dtype(llava, torch_dtype)
+        ensure_all_on_device(llava, device)
 
         # Activate gradient checkpointing
         if gradient_checkpointing:
@@ -233,23 +318,20 @@ class LlavaPEFT(torch.nn.Module):
         )
 
         inputs["pixel_values"] = image_inputs["pixel_values"]
-        inputs["aux_pixel_values"] = image_inputs["aux_pixel_values"]
+        inputs["aux_inputs"] = image_inputs["aux_inputs"]
 
         return inputs
 
     def forward(
         self,
         pixel_values: torch.Tensor,
-        aux_pixel_values: Optional[torch.Tensor],
+        aux_inputs: Optional[List[torch.Tensor]] = None,
         **inputs,
     ):
-        if aux_pixel_values is not None:
-            merged_pixel_values = torch.cat(
-                [pixel_values.unsqueeze(0), aux_pixel_values], dim=0
-            )
-            inputs["pixel_values"] = merged_pixel_values
+        if aux_inputs is not None:
+            inputs["pixel_values"] = [pixel_values, *aux_inputs]
         else:
-            inputs["pixel_values"] = pixel_values.unsqueeze(0)
+            inputs["pixel_values"] = [pixel_values]
 
         if self.conditional_fuser:
             language_embeds = self.llava.base_model.get_input_embeddings()(
@@ -258,4 +340,5 @@ class LlavaPEFT(torch.nn.Module):
 
             language_embeds = language_embeds.mean(dim=1)
             inputs["pixel_values"] = (inputs["pixel_values"], language_embeds)
+
         return self.llava(**inputs)

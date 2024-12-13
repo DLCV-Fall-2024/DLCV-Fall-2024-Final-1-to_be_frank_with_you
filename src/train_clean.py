@@ -29,6 +29,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     logging.set_verbosity_error()
 
     from src.models.llava import LlavaPEFT
+    from src.models.utils import ensure_all_on_device, ensure_all_same_dtype
     from src.utils.experiment import dump_additional_config
     from utils import default
     from utils.dataset import DiscDataset
@@ -55,7 +56,11 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
         gradient_checkpointing=not use_cache,
         lora_config=mp.lora_config,
         conditional_fuser=getattr(mp, "conditional_fuser", False),
+        device=device,
+        torch_dtype=torch.bfloat16,
     )
+    # ensure_all_on_device(model, device)
+    # ensure_all_same_dtype(model, torch.bfloat16)
     addition_config["model_struct"] = model.get_model_struct()
 
     transform = model.transform
@@ -114,7 +119,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     accum_steps = getattr(op, "accumulation_steps", 1)
     print(f"Effective batch size: {op.batch_size * accum_steps}")
     print(f"Using {device} device")
-
+    gradient_clip_val = getattr(op, "gradient_clip_val", 1.0)
     ##########################################################
 
     project_name = default(config.project_name, "DLCV-FINAL-Traffic-LLaVA")
@@ -154,26 +159,41 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
                 inputs = transform(batch["image"], prompt=batch["prompt"]).to(
                     device, torch.bfloat16
                 )
+
                 for k, v in inputs.items():
                     if torch.is_tensor(v) and v.dtype in [
                         torch.float32,
                         torch.float64,
-                        torch.float16,
+                        torch.bfloat16,
                         torch.bfloat16,
                     ]:
                         v.requires_grad = True
+                    elif isinstance(v, (list, tuple)):
+                        for elem in v:
+                            if torch.is_tensor(elem) and elem.dtype in [
+                                torch.float32,
+                                torch.float64,
+                                torch.bfloat16,
+                                torch.bfloat16,
+                            ]:
+                                elem.requires_grad = True
                 labels = inputs["input_ids"].clone()
 
                 DEBUG.stamp()
-                DEBUG.set_params(**{"labels": labels})
                 out = model.forward(
                     **inputs,
                     labels=labels,
                     vision_feature_select_strategy=mp.vision_feature_select_strategy,
                     use_cache=use_cache,
                 )
+                DEBUG.stamp()
+
+                DEBUG.set_params(**{"loss": out.loss})
                 loss = out.loss  # / accum_steps
                 loss.backward()
+
+                # gradient clipping
+                torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip_val)
                 if pp.debug:
                     for name, param in model.named_parameters():
                         if param.requires_grad and param.grad is None:

@@ -29,7 +29,8 @@ class GeminiSinglePair(nn.Module):
         self, image_feature: torch.Tensor, auxiliary_feature: torch.Tensor
     ) -> torch.Tensor:
         # batch_size = image_tokens.size(0)
-
+        main_device = image_feature.device
+        auxiliary_feature = auxiliary_feature.to(main_device)
         # Concatenate image and depth tokens (along sequence dimension)
         combined_feature = torch.cat(
             [image_feature, auxiliary_feature], dim=1
@@ -102,7 +103,7 @@ class GeminiFuser(Fuser):
             [
                 GeminiSinglePair(
                     d_model=d_model, num_heads=num_heads, mlp_hidden_dim=mlp_hidden_dim
-                ).bfloat16()
+                )
                 for _ in range(self.n_auxiliary_features)
             ]
         )

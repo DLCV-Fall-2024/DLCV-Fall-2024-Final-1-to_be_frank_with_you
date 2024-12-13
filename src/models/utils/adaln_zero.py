@@ -23,5 +23,6 @@ class AdaLNZero(nn.Module):
         # condition: [batch_size, condition_dim], turn text condition into embedding first
 
         condition_embedding = self.nonlinear(condition)
-        shift, scale = self.layer(condition_embedding)
+        out: torch.Tensor = self.layer(condition_embedding)
+        shift, scale = out.chunk(2, dim=1)
         return modulate(x, shift, scale)

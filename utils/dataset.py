@@ -1,13 +1,12 @@
-from typing import Dict, Optional, Tuple, Union, List, cast, Callable
-from dataclasses import dataclass
-from dataclasses_json import dataclass_json
 import json
+from dataclasses import dataclass
 from pathlib import Path
-
-import typer
+from typing import Callable, Dict, List, Optional, Tuple, Union, cast
 
 import PIL
 import PIL.Image
+import typer
+from dataclasses_json import dataclass_json
 from datasets import load_dataset
 from PIL.Image import Image
 from torch.utils.data import Dataset
@@ -254,7 +253,7 @@ def preprocess_dataset(
 
 
 import torch
-from transformers import AutoProcessor, AutoModel
+from transformers import AutoModel, AutoProcessor
 
 
 def process_output(output, vision_feature_layer: int = -2):
