@@ -18,6 +18,7 @@ class ModelParams:
 
     fuser_id: str = "gemini"
     conditional_fuser: bool = True
+    condition_dropout: float = 0.3
 
     patch_size: int = 14
     vision_feature_select_strategy: str = "full"  # "default" or "full"

@@ -6,6 +6,7 @@ import typer
 app = typer.Typer(pretty_exceptions_show_locals=False)
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+import warnings
 
 
 @app.command()
@@ -33,7 +34,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     from src.utils.experiment import dump_additional_config
     from utils import default
     from utils.dataset import DiscDataset
-    from utils.log import PerformanceMonitor, Timer, init_logger, init_wandb
+    from utils.log import PerformanceMonitor, Timer, init_logger, init_wandb, print_once
 
     addition_config = {}
     mp = config.model
@@ -55,7 +56,6 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
         model_params=mp,
         gradient_checkpointing=not use_cache,
         lora_config=mp.lora_config,
-        conditional_fuser=getattr(mp, "conditional_fuser", False),
         device=device,
         torch_dtype=torch.bfloat16,
     )
@@ -160,32 +160,21 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
                     device, torch.bfloat16
                 )
 
-                for k, v in inputs.items():
-                    if torch.is_tensor(v) and v.dtype in [
-                        torch.float32,
-                        torch.float64,
-                        torch.bfloat16,
-                        torch.bfloat16,
-                    ]:
-                        v.requires_grad = True
-                    elif isinstance(v, (list, tuple)):
-                        for elem in v:
-                            if torch.is_tensor(elem) and elem.dtype in [
-                                torch.float32,
-                                torch.float64,
-                                torch.bfloat16,
-                                torch.bfloat16,
-                            ]:
-                                elem.requires_grad = True
                 labels = inputs["input_ids"].clone()
 
                 DEBUG.stamp()
-                out = model.forward(
-                    **inputs,
-                    labels=labels,
-                    vision_feature_select_strategy=mp.vision_feature_select_strategy,
-                    use_cache=use_cache,
-                )
+
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        message="None of the inputs have requires_grad=True. Gradients will be None",
+                    )
+                    out = model.forward(
+                        **inputs,
+                        labels=labels,
+                        vision_feature_select_strategy=mp.vision_feature_select_strategy,
+                        use_cache=use_cache,
+                    )
                 DEBUG.stamp()
 
                 DEBUG.set_params(**{"loss": out.loss})
@@ -196,8 +185,10 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
                 torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip_val)
                 if pp.debug:
                     for name, param in model.named_parameters():
-                        if param.requires_grad and param.grad is None:
-                            print(f"Warning: {name}.grad is {param.grad}.")
+                        if param.requires_grad and (
+                            param.grad is None or torch.isnan(param.grad).any()
+                        ):
+                            print_once(f"Warning: {name}.grad is {param.grad}.")
                 global_step += op.batch_size
                 accum_loss += loss.item()
                 # if global_step % accum_steps == 0:

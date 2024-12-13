@@ -1,3 +1,4 @@
+import colorsys
 from typing import Dict, List, Optional, Set, Tuple
 
 import torch
@@ -6,6 +7,7 @@ from transformers import (
     AutoImageProcessor,
     AutoModel,
     DinatModel,
+    OneFormerConfig,
     OneFormerForUniversalSegmentation,
     OneFormerImageProcessor,
     OneFormerProcessor,
@@ -52,10 +54,15 @@ class SegmentationEncoder(VisionEncoder):
         self.torch_dtype = torch_dtype
         self.device = device
 
-        id2rgb = []
-        for i in range(256):
-            id2rgb.append((i, i, i))
-        self.id2rgb = torch.tensor(id2rgb, dtype=torch.uint8).to(self.device)
+        self.id2rgb = torch.tensor(
+            [
+                [
+                    int(c * 255) for c in colorsys.hsv_to_rgb(i / 255, 1.0, 1.0)
+                ]  # Saturation=1, Value=1
+                for i in range(256)
+            ],
+            dtype=torch.uint8,
+        ).to(self.device)
 
     @property
     def hidden_states_dim(self) -> int:
@@ -69,27 +76,19 @@ class SegmentationEncoder(VisionEncoder):
         overlap_mask_area_threshold: float = 0.8,
         **kwargs,
     ) -> ImageEncoderOutput:
-        # # TODO: these functions failed
-        # raise NotImplementedError("SegmentationEncoder not implemented")
         pixel_values = pixel_values.to(torch.float32)
         self.model = self.model.to(torch.float32)
-        outputs = self.model(pixel_values, **kwargs)
 
-        # loss: Optional[torch.FloatTensor] = None
-        # class_queries_logits: torch.FloatTensor = None
-        # masks_queries_logits: torch.FloatTensor = None
-        # auxiliary_predictions: List[Dict[str, torch.FloatTensor]] = None
-        # encoder_hidden_states: Optional[Tuple[torch.FloatTensor]] = None
-        # pixel_decoder_hidden_states: Optional[List[torch.FloatTensor]] = None
-        # transformer_decoder_hidden_states: Optional[torch.FloatTensor] = None
-        # transformer_decoder_object_queries: torch.FloatTensor = None
-        # transformer_decoder_contrastive_queries: Optional[torch.FloatTensor] = None
-        # transformer_decoder_mask_predictions: torch.FloatTensor = None
-        # transformer_decoder_class_predictions: torch.FloatTensor = None
-        # transformer_decoder_auxiliary_predictions: Optional[List[Dict[str, torch.FloatTensor]]] = None
-        # text_queries: Optional[torch.FloatTensor] = None
-        # task_token: torch.FloatTensor = None
-        # attentions: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
+        batch_size = pixel_values.shape[0]
+        task_inputs = kwargs.get("task_inputs", None)
+        assert task_inputs is not None, "task_inputs is required for segmentation"
+        assert isinstance(
+            task_inputs, torch.Tensor
+        ), "task_inputs must be a torch.Tensor, you should use `OneFormerProcessor` instead of `OneFormerImageProcessor`"
+        if task_inputs.shape[0] != batch_size:
+            task_inputs = task_inputs.expand(batch_size, -1)
+        kwargs["task_inputs"] = task_inputs
+        outputs = self.model(pixel_values, **kwargs)
 
         results: List[Dict[str, torch.Tensor]] = (
             self.image_processor.post_process_panoptic_segmentation(
@@ -104,16 +103,20 @@ class SegmentationEncoder(VisionEncoder):
             )
         )
         predictions = []
+        IGNORE_VALUE = 255
         for result in results:
             segmentation = result["segmentation"]
             segmentation_info = result["segments_info"]
             infos = {v["id"]: v["label_id"] for v in segmentation_info}
-            infos[0] = 255
+
+            infos[0] = IGNORE_VALUE
             pred = torch.zeros_like(segmentation)
             label_ids = torch.unique(segmentation).tolist()
             for label_id in label_ids:
                 mask = segmentation == label_id
                 pred[mask] = infos[label_id]
+            pred[pred < 0] = IGNORE_VALUE
+            pred[pred > 255] = IGNORE_VALUE
             pred = pred.to(self.device)
             color_pred = self.id2rgb[pred]
             color_pred = color_pred.permute(2, 0, 1)

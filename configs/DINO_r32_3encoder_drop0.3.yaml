@@ -14,6 +14,7 @@ model:
   segmentation_model_id: shi-labs/oneformer_ade20k_dinat_large
   fuser_id: gemini
   conditional_fuser: true
+  condition_dropout: 0.3
   patch_size: 14
   vision_feature_select_strategy: full
   gradient_checkpointing: true
@@ -41,6 +42,7 @@ dataset:
 optimization:
   epochs: 1
   lr: 3.0e-05
-  batch_size: 4
+  batch_size: 8
   optimizer_type: default
   accumulation_steps: 4
+  gradient_clip_val: 1.0

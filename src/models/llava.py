@@ -68,7 +68,6 @@ class VisionTower(torch.nn.Module):
         self,
         model_params: ModelParams,
         vision_feature_layer: int,
-        conditional_fuser: bool = False,
         language_embeds_dim: int = 768,
         segment_type: str = "semantic",  # ["semantic", "instance", "panoptic"]
         torch_dtype: torch.dtype = torch.bfloat16,
@@ -139,12 +138,13 @@ class VisionTower(torch.nn.Module):
         self.fuser = FUSERS[model_params.fuser_id](
             n_auxiliary_features=self.n_auxiliary_features,
             d_model=self.encoder.model.config.hidden_size,
-            conditional_fuser=conditional_fuser,
+            conditional_fuser=model_params.conditional_fuser,
             # num_heads=self.encoder.model.config.num_attention_heads,
             # mlp_hidden_dim=self.encoder.model.config.mlp_hidden_dim,
         ).to(device, torch_dtype)
 
-        self.conditional_fuser = conditional_fuser
+        self.conditional_fuser = model_params.conditional_fuser
+        self.condition_dropout = model_params.condition_dropout
         if self.conditional_fuser:
             self.AdaLNZero = AdaLNZero(
                 hidden_dim=self.encoder.model.config.hidden_size,
@@ -187,18 +187,30 @@ class VisionTower(torch.nn.Module):
                     wanted_feature.shape, main_dim
                 )
                 auxiliary_features.append(wanted_feature)
-            # Residual connection
+
             fused_features = self.fuser(image_feature, auxiliary_features)
+            adjust_feature = fused_features
+
             if self.conditional_fuser:
-
-                fused_features: torch.Tensor = self.AdaLNZero(
-                    torch.cat(fused_features, dim=1),
-                    language_embeds,
+                concatenated_features = torch.cat(fused_features, dim=1)
+                cond_adjust: torch.Tensor = self.AdaLNZero(
+                    concatenated_features, language_embeds
                 )
-                adjust_feature = fused_features.chunk(self.n_auxiliary_features, dim=1)
-                fused_features = torch.stack(adjust_feature, dim=0).mean(dim=0)
 
-            out_feature = image_feature + fused_features
+                adjust_feature = torch.stack(
+                    cond_adjust.chunk(self.n_auxiliary_features, dim=1), dim=0
+                ).mean(dim=0)
+
+                if self.condition_dropout > 0:
+                    mean_feature = torch.stack(fused_features, dim=0).mean(dim=0)
+
+                    adjust_feature = nn.functional.dropout(
+                        adjust_feature, p=self.condition_dropout, training=self.training
+                    )
+                    dropout_mask = adjust_feature == 0
+                    adjust_feature[dropout_mask] = mean_feature[dropout_mask]
+            # Residual connection
+            out_feature = image_feature + adjust_feature
         else:
             out_feature = image_feature
 
@@ -214,9 +226,9 @@ class LlavaPEFT(torch.nn.Module):
         model_params: ModelParams,
         gradient_checkpointing: bool,
         lora_config: Dict[str, Any],
-        conditional_fuser: bool = False,
         device: torch.device = torch.device("cpu"),
         torch_dtype: torch.dtype = torch.bfloat16,
+        **kwargs,
     ):
         super().__init__()
 
@@ -228,13 +240,13 @@ class LlavaPEFT(torch.nn.Module):
 
         # Change the vision tower to the encoder
         vision_feature_layer = default(llava.config.vision_feature_layer, -2)
-        self.conditional_fuser = conditional_fuser
+        self.conditional_fuser = model_params.conditional_fuser
+        self.condition_dropout = model_params.condition_dropout
         language_embeds_dim = llava.get_input_embeddings().weight.shape[1]
 
         self.vision_tower = VisionTower(
             model_params,
             vision_feature_layer,
-            conditional_fuser=conditional_fuser,
             language_embeds_dim=language_embeds_dim,
             torch_dtype=torch_dtype,
             device=device,
