@@ -76,8 +76,7 @@ class DiscDataset(Dataset):
         self.trainer_input_kwargs = trainer_input_kwargs
 
     def __len__(self):
-        # return len(self.config)
-        return 8000
+        return len(self.config)
 
     def __getitem__(self, idx: int):
         if self.use_trainer:
