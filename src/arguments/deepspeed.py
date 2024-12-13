@@ -1,14 +1,12 @@
 import os
 from dataclasses import dataclass, field
-from typing import Optional, Any
+from typing import Optional, Any, Dict
 
 
 @dataclass
 class ModelParams:
-    device: str = "cuda"
-
     model_id: str = "llava-hf/llava-1.5-7b-hf"
-    
+
     change_encoder: bool = False
     encoder_id: str = "facebook/dinov2-large"
 
@@ -20,7 +18,7 @@ class ModelParams:
 
     fuser_id: str = "gemini"
 
-    patch_size: int = 14
+    # patch_size: int = 14
     vision_feature_select_strategy: str = "full"  # "default" or "full"
     gradient_checkpointing: bool = True
     lora_config: dict = field(
@@ -43,12 +41,6 @@ class ModelParams:
 
 
 @dataclass
-class PipelineParams:
-    wandb: bool = True
-    debug: bool = False
-
-
-@dataclass
 class DatasetParams:
     dataset_path: str = "data"
     seed: int = 42
@@ -67,41 +59,43 @@ class OptimizationParams:
 
 @dataclass
 class DeepSpeedParams:
-    enable: bool = True
-    config: dict = field(
-        default_factory=lambda: {
-            "train_batch_size": 4,
-            "gradient_accumulation_steps": 4,
-            "optimizer": {
-                "type": "AdamW",
-                "params": {
-                    "lr": 3e-5,
-                },
-            },
-            "scheduler": {
-                "type": "OneCycle",
-                "params": {
-                    "cycle_max_lr": 3e-5,
-                },
-            },
-            "bf16": {
-                "enabled": True,
-            },
-            # "amp": {
-            #     "enabled": True,
-            #     "opt_level": "O1",
-            # },
-            # "flops_profiler": {
-            #     "enabled": True,
-            #     "profile_step": 1,
-            #     "module_depth": -1,
-            #     "top_modules": 1,
-            #     "detailed": True,
-            #     # TODO: Set this to the log directory in training code
-            #     "output_file": None,
-            # },
-        }
-    )
+    wandb: bool = True
+    # Not working
+    log_level: str = "info"
+    config: Dict = field(default_factory=lambda: {})
+    # field(
+    #     default_factory=lambda: {
+    #         "train_micro_batch_size_per_gpu": 4,
+    #         "gradient_accumulation_steps": 4,
+    #         "bf16": {
+    #             "enabled": True,
+    #         },
+    #         "flops_profiler": {
+    #             "enabled": True,
+    #             "detailed": True,
+    #         },
+    #         "zero_optimization": {
+    #             "stage": 3,
+    #             "offload_optimizer": {
+    #                 "device": "cpu",
+    #                 "pin_memory": True,
+    #             },
+    #             "offload_param": {
+    #                 "device": "cpu",
+    #                 "pin_memory": True,
+    #             },
+    #             "overlap_comm": True,
+    #             "contiguous_gradients": True,
+    #             "sub_group_size": 1e9,
+    #             "reduce_bucket_size": "auto",
+    #             "stage3_prefetch_bucket_size": "auto",
+    #             "stage3_param_persistence_threshold": "auto",
+    #             "stage3_max_live_parameters": 1e9,
+    #             "stage3_max_reuse_distance": 1e9,
+    #             "stage3_gather_16bit_weights_on_model_save": True,
+    #         },
+    #     }
+    # )
 
 
 @dataclass
@@ -110,11 +104,11 @@ class Config:
     run_name: Optional[str] = None
 
     seed: int = 42
-    local_rank: Any = os.getenv("LOCAL_RANK", -1)
+    debug: bool = False
+    profile: bool = False
     liger_kernel: bool = True
 
     model: ModelParams = field(default_factory=ModelParams)
-    pipeline: PipelineParams = field(default_factory=PipelineParams)
     dataset: DatasetParams = field(default_factory=DatasetParams)
     optimization: OptimizationParams = field(default_factory=OptimizationParams)
     deepspeed: DeepSpeedParams = field(default_factory=DeepSpeedParams)

@@ -4,41 +4,62 @@ app = typer.Typer(pretty_exceptions_show_locals=False)
 
 
 @app.command()
-def main(name: str = typer.Argument(..., help="Name of the experiment")):
+def main(
+    name: str = typer.Argument(..., help="Name of the experiment"),
+    local_rank: int = typer.Option(0, "--local_rank", help="Local rank"),
+):
     from src.arguments.deepspeed import Config
     from src.utils.experiment import load_config
 
-    config, timestamp, output_dir, checkpoint_dir, log_dir = load_config(name, Config)
+    assets = load_config(
+        name,
+        Config,
+        auto_create=local_rank == 0,
+        external_defaults=[(["deepspeed", "config"], "deepspeed_default")],
+    )
+    config, timestamp, output_dir, checkpoint_dir, log_dir = assets
     if config is None:
         print("Configuration created")
         return
 
+    import os
     from pathlib import Path
+    import json
+    from omegaconf import OmegaConf
+    from tqdm import tqdm
 
     import torch
-    from liger_kernel.transformers import apply_liger_kernel_to_llama
     import deepspeed
-    from omegaconf import OmegaConf
+    from liger_kernel.transformers import apply_liger_kernel_to_llama
     from pytorch_lightning import seed_everything
     from torch.utils.data import DataLoader
-    from tqdm import tqdm
-    import json
+    from torch.utils.data import DistributedSampler
 
-    from src.models.llava import LlavaPEFT
+    # from src.models.llava import LlavaPEFT
+    from src.models.llava_ds_test import LlavaPEFT
     from src.utils.experiment import dump_additional_config
-    from utils import default
-    from utils.dataset import DiscDataset
-    from utils.log import PerformanceMonitor, Timer, init_logger, init_wandb
+    from src.utils import default
+    from src.utils.dataset import DiscDataset
+    from src.utils.log import (
+        PerformanceMonitor,
+        Timer,
+        Profiler,
+        init_logger,
+        init_wandb,
+    )
+
+    from torch.profiler import profile, record_function, ProfilerActivity
 
     addition_config = {}
     mp = config.model
     dp = config.dataset
-    pp = config.pipeline
     op = config.optimization
     dsp = config.deepspeed
 
     seed_everything(config.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    world_size = torch.cuda.device_count()
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if config.liger_kernel:
         apply_liger_kernel_to_llama()
@@ -53,14 +74,20 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     transform = model.transform
     processor = model.processor
 
-    trainable_params, all_param = model.llava.get_nb_trainable_parameters()
-    print(
-        f"Trainable: {trainable_params/1e6:.4f}M | All: {all_param/1e6:.4f}M | Ratio: {trainable_params/all_param * 100:.3f}%"
-    )
+    # trainable_params, all_param = model.llava.get_nb_trainable_parameters()
+    # print(
+    #     f"Trainable: {trainable_params/1e6:.4f}M | All: {all_param/1e6:.4f}M | Ratio: {trainable_params/all_param * 100:.3f}%"
+    # )
+    # WARNING: Test
+    total = 0
+    for param in model.parameters():
+        if param.requires_grad:
+            total += param.numel()
+    print(f"Total trainable parameters: {total / 1e6:.4f}M")
 
-    for name, param in model.named_parameters():
-        if not (param.requires_grad == ("lora" in name)):
-            print(f"Warning: {name}.required_grad= {param.requires_grad}.")
+    # for name, param in model.named_parameters():
+    #     if not (param.requires_grad == ("lora" in name)):
+    #         print(f"Warning: {name}.required_grad= {param.requires_grad}.")
 
     dump_additional_config(addition_config, output_dir)
     del addition_config
@@ -75,12 +102,18 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     ), f"Dataset not found. {dataset_dir} should contain 'train' and 'val' folders."
 
     train_dataset = DiscDataset(train_set, train=True)
+    train_sampler = DistributedSampler(
+        train_dataset,
+        num_replicas=world_size,
+        rank=local_rank,
+        shuffle=True,
+    )
     train_loader = DataLoader(
         train_dataset,
         batch_size=op.batch_size,
         prefetch_factor=dp.prefetch_factor,
         num_workers=dp.num_workers,
-        shuffle=True,
+        sampler=train_sampler,
     )
 
     val_dataset = DiscDataset(val_set, train=True)
@@ -90,28 +123,77 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
         num_workers=dp.num_workers,
     )
 
-    ##########################################################
+    ######################### Logging ########################
 
-    project_name = default(config.project_name, "DLCV-FINAL-Traffic-LLaVA")
-    run_name = default(
-        config.run_name, f"{name}-{mp.model_id.split('/')[-1]}-{timestamp}"
-    )
+    os.environ["DEEPSPEED_LOG_LEVEL"] = dsp.log_level
 
-    if pp.wandb:
+    if dsp.wandb:
+        project_name = default(config.project_name, "DLCV-FINAL-Traffic-LLaVA")
+        run_name = default(
+            config.run_name, f"{name}-{mp.model_id.split('/')[-1]}-{timestamp}"
+        )
+
+        print(f"Logging to {run_name}")
         init_wandb(
             project_name,
             run_name,
             config=OmegaConf.to_container(config, resolve=True),
             log_dir=log_dir,
-            local_rank=config.local_rank,
+            local_rank=local_rank,
         )
-    logger = init_logger(local_rank=config.local_rank)
+
+        dsp.config["wandb"] = dict(enabled=True)
+
+    logger = init_logger(local_rank=local_rank)
     print(type(logger))
 
     timer = Timer(10 * 60)  # 10 minutes
-    DEBUG = PerformanceMonitor(pp.debug)
+    DEBUG = PerformanceMonitor(config.debug)
+    global_step = 0
 
     ###################### Optimization ######################
+
+    dsp.config["optimizer"] = dict(
+        type="AdamW",
+        params=dict(lr=op.lr),
+    )
+
+    ## Definition of `step`:
+    ##   scheduler step: number of data point per gradient update
+    ##   wandb step: one data point
+    ## Note: gradient is updated when all ranks have finished accumulating gradients
+    total_steps = len(train_dataset) * op.epochs
+    batch_size = (
+        dsp.config["train_micro_batch_size_per_gpu"] * torch.cuda.device_count()
+    )
+    grad_acc_steps = dsp.config["gradient_accumulation_steps"]
+    total_update_steps = total_steps // (batch_size * grad_acc_steps)
+
+    first_step_size = total_update_steps * 0.3
+    second_step_size = total_update_steps * 0.7
+    dsp.config["scheduler"] = dict(
+        type="OneCycle",
+        params=dict(
+            cycle_first_step_size=first_step_size,
+            cycle_first_stair_count=first_step_size * 0.5,
+            cycle_second_step_size=second_step_size,
+            cycle_second_stair_count=second_step_size * 0.5,
+            decay_step_size=0,
+            cycle_max_lr=op.lr,
+            cycle_min_lr=op.lr / 25,
+            decay_lr_rate=0.001,
+            cycle_min_mom=0.85,
+            cycle_max_mom=0.99,
+            decay_mom_rate=0.0,
+        ),
+    )
+
+    # dsp_plugin = DeepSpeedPlugin(
+    #     gradient_accumulation_steps=dsp.config["gradient_accumulation_steps"],
+    #     gradient_clipping=dsp.config["gradient_clipping"],
+    #     zero_stage=dsp.config["zero_optimization"]["stage"],
+    # )
+    # accelerator = Accelerator(deepspeed_plugin=dsp_plugin)
 
     # DeepSpeed read config from file
     deepspeed_config_path = output_dir / "deepspeed_config.json"
@@ -120,31 +202,81 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
 
     deepspeed_args = lambda: None  # "object" type cannot assign attribute
     deepspeed_args.deepspeed_config = deepspeed_config_path
-    model_engine, optimizer, _, _ = deepspeed.initialize(
+    model_engine, _, _, _ = deepspeed.initialize(
+        # model_engine, _, train_loader, _ = deepspeed.initialize(
         args=deepspeed_args,
         model=model,
+        training_data=train_dataset,
     )
 
-    for epoch in range(op.epochs):
-        train_bar = tqdm(train_loader)
-        train_bar.set_description(f"[Train {epoch}/{op.epochs}]")
-        for ids, batch in train_bar:
-            with DEBUG:
-                inputs = transform(batch["image"], prompt=batch["prompt"]).to(
-                    device, torch.bfloat16
-                )
-                for k, v in inputs.items():
-                    if torch.is_tensor(v) and v.dtype in [
-                        torch.float32,
-                        torch.float64,
-                        torch.float16,
-                        torch.bfloat16,
-                    ]:
-                        v.requires_grad = True
-                labels = inputs["input_ids"].clone()
+    ###################### Training ######################
 
-                DEBUG.stamp()
-                DEBUG.set_params(**{"labels": labels})
+    PROF = Profiler(profile=config.profile)
+
+    with PROF:
+        for epoch in range(op.epochs):
+            train_bar = tqdm(train_loader)
+            train_bar.set_description(f"[Train {epoch}/{op.epochs}]")
+            for ids, batch in train_bar:
+                with DEBUG:
+                    # inputs = transform(batch["image"], prompt=batch["prompt"]).to(
+                    #     device, torch.bfloat16
+                    # )
+
+                    inputs = transform(batch["image"], prompt=batch["prompt"]).to(
+                        device=local_rank
+                    )
+                    batch_size = batch["image"].shape[0]
+                    inputs["labels"] = torch.zeros(batch_size, dtype=torch.long)
+                    inputs["labels"] = inputs["labels"].to(device=local_rank)
+
+                    for k, v in inputs.items():
+                        if torch.is_tensor(v) and v.dtype in [
+                            torch.float32,
+                            torch.float64,
+                            torch.float16,
+                            torch.bfloat16,
+                        ]:
+                            v.requires_grad = True
+                    # labels = inputs["input_ids"].clone()
+
+                    # DEBUG.stamp()
+                    # DEBUG.set_params(**{"labels": labels})
+
+                    outputs = model_engine.forward(inputs)
+                    loss = outputs.loss
+                    model_engine.backward(loss)
+
+                    if config.debug:
+                        for name, param in model.named_parameters():
+                            if param.requires_grad and param.grad is None:
+                                print(f"Warning: {name}.grad is {param.grad}.")
+
+                    # weight update
+                    model_engine.step()
+
+                    global_step += 1
+                    # logger({"train/loss": loss, "global_step": global_step})
+                    # logger(
+                    #     {
+                    #         "train/lr": scheduler.get_last_lr(),
+                    #         "global_step": global_step,
+                    #     }
+                    # )
+
+                    # DEBUG.stamp()
+                    # DEBUG.stamp()
+                    # DEBUG.log_performance(log_per=20)
+                    del outputs, loss
+
+                    if timer.timesup():
+                        model_engine.save_checkpoint(checkpoint_dir)
+                        timer.reset()
+
+    if local_rank == 0:
+        PROF.export(output_dir / "trace.json")
+
+    print(dsp.config["zero_optimization"])
 
 
 if __name__ == "__main__":

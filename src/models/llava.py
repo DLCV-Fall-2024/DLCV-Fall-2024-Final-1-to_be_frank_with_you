@@ -12,7 +12,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPooling
 from deepspeed.runtime.zero.stage3 import estimate_zero3_model_states_mem_needs_all_live
 
 from src.arguments.dataclass import ModelParams
-from utils import default
+from src.utils import default
 
 from .encoder import DepthEncoder, SegmentationEncoder, VisionEncoder
 from .fuser import FUSERS

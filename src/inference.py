@@ -29,8 +29,8 @@ from src.arguments import (
     PipelineParams,
     YamlArgsLoader,
 )
-from utils.dataset import DiscDataset
-from utils.log import PerformanceMonitor, Timer, pretty_print
+from src.utils.dataset import DiscDataset
+from src.utils.log import PerformanceMonitor, Timer, pretty_print
 
 
 def arg_parser():

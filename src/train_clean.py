@@ -24,9 +24,9 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
 
     from src.models.llava import LlavaPEFT
     from src.utils.experiment import dump_additional_config
-    from utils import default
-    from utils.dataset import DiscDataset
-    from utils.log import PerformanceMonitor, Timer, init_logger, init_wandb
+    from src.utils import default
+    from src.utils.dataset import DiscDataset
+    from src.utils.log import PerformanceMonitor, Timer, init_logger, init_wandb
 
     addition_config = {}
     mp = config.model
