@@ -15,3 +15,6 @@ omegaconf
 typer
 dataclasses-json
 xFormers
+deepspeed
+mpi4py
+liger-kernel
