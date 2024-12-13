@@ -2,8 +2,8 @@ gradient_clipping: 1.0
 bf16:
   enabled: true
 flops_profiler:
-  enabled: true
-  detailed: true
+  enabled: false
+  detailed: false
 zero_optimization:
   stage: 3
   offload_optimizer:

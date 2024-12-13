@@ -187,11 +187,10 @@ def main(
 
     ###################### Training ######################
 
-    # DeepSpeed read config from file
-    # model_engine, _, _, _ = deepspeed.initialize(
-    #     config=OmegaConf.to_container(dsp.config, resolve=True),
-    #     model=model,
-    # )
+    model_engine, _, _, _ = deepspeed.initialize(
+        config=OmegaConf.to_container(dsp.config, resolve=True),
+        model=model,
+    )
 
     with Profiler(profile=config.profile) as PROFILER:
         for epoch in range(dsp.epochs):
@@ -203,11 +202,6 @@ def main(
                         batch["image"],
                         prompt=batch["prompt"],
                     ).to(device=local_rank)
-                    inputs["labels"] = torch.zeros(
-                        dsp.batch_size,
-                        dtype=torch.long,
-                        device=local_rank,
-                    )
 
                     for k, v in inputs.items():
                         if torch.is_tensor(v) and v.dtype in [
@@ -222,9 +216,14 @@ def main(
                     DEBUG.stamp()
                     DEBUG.set_params(**{"labels": labels})
 
-                    # outputs = model_engine.forward(inputs)
-                    # loss = outputs.loss
-                    # model_engine.backward(loss)
+                    outputs = model_engine.forward(
+                        **inputs,
+                        labels=labels,
+                        vision_feature_select_strategy=mp.vision_feature_select_strategy,
+                        use_cache=True,
+                    )
+                    loss = outputs.loss
+                    model_engine.backward(loss)
 
                     if config.debug:
                         for name, param in model.named_parameters():
@@ -232,7 +231,7 @@ def main(
                                 print(f"Warning: {name}.grad is {param.grad}.")
 
                     # weight update
-                    # model_engine.step()
+                    model_engine.step()
                     global_step += 1
                     # logger({"train/loss": loss, "global_step": global_step})
                     # logger(
@@ -245,10 +244,10 @@ def main(
                     DEBUG.stamp()
                     DEBUG.stamp()
                     DEBUG.log_performance(log_per=20)
-                    # del outputs, loss
+                    del outputs, loss
 
                     if timer.timesup():
-                        # model_engine.save_checkpoint(checkpoint_dir)
+                        model_engine.save_checkpoint(checkpoint_dir)
                         timer.reset()
 
     if local_rank == 0:
