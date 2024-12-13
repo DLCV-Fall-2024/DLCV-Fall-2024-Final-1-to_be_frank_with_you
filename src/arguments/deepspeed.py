@@ -49,66 +49,25 @@ class DatasetParams:
 
 
 @dataclass
-class OptimizationParams:
-    epochs: int = 1
-    lr: float = 3e-5
-    batch_size: int = 4
-    optimizer_type: str = "default"
-    accumulation_steps: int = 4
-
-
-@dataclass
 class DeepSpeedParams:
-    wandb: bool = True
-    # Not working
-    log_level: str = "info"
+    epochs: int = 1
+    learning_rate: float = 3e-5
+    batch_size: int = 4
+    accumulation_steps: int = 4
     config: Dict = field(default_factory=lambda: {})
-    # field(
-    #     default_factory=lambda: {
-    #         "train_micro_batch_size_per_gpu": 4,
-    #         "gradient_accumulation_steps": 4,
-    #         "bf16": {
-    #             "enabled": True,
-    #         },
-    #         "flops_profiler": {
-    #             "enabled": True,
-    #             "detailed": True,
-    #         },
-    #         "zero_optimization": {
-    #             "stage": 3,
-    #             "offload_optimizer": {
-    #                 "device": "cpu",
-    #                 "pin_memory": True,
-    #             },
-    #             "offload_param": {
-    #                 "device": "cpu",
-    #                 "pin_memory": True,
-    #             },
-    #             "overlap_comm": True,
-    #             "contiguous_gradients": True,
-    #             "sub_group_size": 1e9,
-    #             "reduce_bucket_size": "auto",
-    #             "stage3_prefetch_bucket_size": "auto",
-    #             "stage3_param_persistence_threshold": "auto",
-    #             "stage3_max_live_parameters": 1e9,
-    #             "stage3_max_reuse_distance": 1e9,
-    #             "stage3_gather_16bit_weights_on_model_save": True,
-    #         },
-    #     }
-    # )
 
 
 @dataclass
 class Config:
-    project_name: Optional[str] = None
-    run_name: Optional[str] = None
-
     seed: int = 42
     debug: bool = False
     profile: bool = False
     liger_kernel: bool = True
 
+    wandb: bool = True
+    project_name: Optional[str] = None
+    run_name: Optional[str] = None
+
     model: ModelParams = field(default_factory=ModelParams)
     dataset: DatasetParams = field(default_factory=DatasetParams)
-    optimization: OptimizationParams = field(default_factory=OptimizationParams)
     deepspeed: DeepSpeedParams = field(default_factory=DeepSpeedParams)

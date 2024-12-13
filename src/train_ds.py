@@ -53,7 +53,6 @@ def main(
     addition_config = {}
     mp = config.model
     dp = config.dataset
-    op = config.optimization
     dsp = config.deepspeed
 
     seed_everything(config.seed)
@@ -110,7 +109,7 @@ def main(
     )
     train_loader = DataLoader(
         train_dataset,
-        batch_size=op.batch_size,
+        batch_size=dsp.batch_size,
         prefetch_factor=dp.prefetch_factor,
         num_workers=dp.num_workers,
         sampler=train_sampler,
@@ -119,20 +118,19 @@ def main(
     val_dataset = DiscDataset(val_set, train=True)
     val_loader = DataLoader(
         val_dataset,
-        batch_size=op.batch_size,
+        batch_size=dsp.batch_size,
         num_workers=dp.num_workers,
     )
 
     ######################### Logging ########################
 
-    os.environ["DEEPSPEED_LOG_LEVEL"] = dsp.log_level
-
-    if dsp.wandb:
+    if config.wandb:
         project_name = default(config.project_name, "DLCV-FINAL-Traffic-LLaVA")
         run_name = default(
             config.run_name, f"{name}-{mp.model_id.split('/')[-1]}-{timestamp}"
         )
 
+        # DeepSpeed doesn't provide run_name setting, so manually init is required
         print(f"Logging to {run_name}")
         init_wandb(
             project_name,
@@ -153,21 +151,25 @@ def main(
 
     ###################### Optimization ######################
 
+    # Training settings
+    dsp.config["train_micro_batch_size_per_gpu"] = dsp.batch_size
+    dsp.config["gradient_accumulation_steps"] = dsp.accumulation_steps
+
+    # Optimizer settings
     dsp.config["optimizer"] = dict(
         type="AdamW",
-        params=dict(lr=op.lr),
+        params=dict(lr=dsp.learning_rate),
     )
 
-    ## Definition of `step`:
-    ##   scheduler step: number of data point per gradient update
-    ##   wandb step: one data point
-    ## Note: gradient is updated when all ranks have finished accumulating gradients
-    total_steps = len(train_dataset) * op.epochs
-    batch_size = (
-        dsp.config["train_micro_batch_size_per_gpu"] * torch.cuda.device_count()
-    )
-    grad_acc_steps = dsp.config["gradient_accumulation_steps"]
-    total_update_steps = total_steps // (batch_size * grad_acc_steps)
+    # Scheduler settings
+    # Definition of `step`:
+    #   scheduler step: number of data point per gradient update
+    #   wandb step: one data point
+    # Note: gradient is updated when all ranks have finished accumulating gradients
+    total_steps = len(train_dataset) * dsp.epochs
+    effective_batch_size = dsp.batch_size * world_size
+    grad_acc_steps = dsp.accumulation_steps
+    total_update_steps = total_steps // (effective_batch_size * grad_acc_steps)
 
     first_step_size = total_update_steps * 0.3
     second_step_size = total_update_steps * 0.7
@@ -179,8 +181,8 @@ def main(
             cycle_second_step_size=second_step_size,
             cycle_second_stair_count=second_step_size * 0.5,
             decay_step_size=0,
-            cycle_max_lr=op.lr,
-            cycle_min_lr=op.lr / 25,
+            cycle_max_lr=dsp.learning_rate,
+            cycle_min_lr=dsp.learning_rate / 25,
             decay_lr_rate=0.001,
             cycle_min_mom=0.85,
             cycle_max_mom=0.99,
@@ -188,56 +190,38 @@ def main(
         ),
     )
 
-    # dsp_plugin = DeepSpeedPlugin(
-    #     gradient_accumulation_steps=dsp.config["gradient_accumulation_steps"],
-    #     gradient_clipping=dsp.config["gradient_clipping"],
-    #     zero_stage=dsp.config["zero_optimization"]["stage"],
-    # )
-    # accelerator = Accelerator(deepspeed_plugin=dsp_plugin)
-
-    # DeepSpeed read config from file
-    deepspeed_config_path = output_dir / "deepspeed_config.json"
-    with open(deepspeed_config_path, "w") as f:
-        json.dump(OmegaConf.to_container(dsp.config, resolve=True), f)
-
-    deepspeed_args = lambda: None  # "object" type cannot assign attribute
-    deepspeed_args.deepspeed_config = deepspeed_config_path
-    model_engine, _, _, _ = deepspeed.initialize(
-        # model_engine, _, train_loader, _ = deepspeed.initialize(
-        args=deepspeed_args,
-        model=model,
-        training_data=train_dataset,
-    )
-
     ###################### Training ######################
 
-    PROF = Profiler(profile=config.profile)
+    # DeepSpeed read config from file
+    model_engine, _, _, _ = deepspeed.initialize(
+        config=OmegaConf.to_container(dsp.config, resolve=True),
+        model=model,
+    )
 
-    with PROF:
-        for epoch in range(op.epochs):
+    with Profiler(profile=config.profile) as PROF:
+        for epoch in range(dsp.epochs):
             train_bar = tqdm(train_loader)
-            train_bar.set_description(f"[Train {epoch}/{op.epochs}]")
+            train_bar.set_description(f"[Train {epoch}/{dsp.epochs}]")
             for ids, batch in train_bar:
                 with DEBUG:
-                    # inputs = transform(batch["image"], prompt=batch["prompt"]).to(
-                    #     device, torch.bfloat16
-                    # )
-
-                    inputs = transform(batch["image"], prompt=batch["prompt"]).to(
-                        device=local_rank
+                    inputs = transform(
+                        batch["image"],
+                        prompt=batch["prompt"],
+                    ).to(device=local_rank)
+                    inputs["labels"] = torch.zeros(
+                        dsp.batch_size,
+                        dtype=torch.long,
+                        device=local_rank,
                     )
-                    batch_size = batch["image"].shape[0]
-                    inputs["labels"] = torch.zeros(batch_size, dtype=torch.long)
-                    inputs["labels"] = inputs["labels"].to(device=local_rank)
 
-                    for k, v in inputs.items():
-                        if torch.is_tensor(v) and v.dtype in [
-                            torch.float32,
-                            torch.float64,
-                            torch.float16,
-                            torch.bfloat16,
-                        ]:
-                            v.requires_grad = True
+                    # for k, v in inputs.items():
+                    #     if torch.is_tensor(v) and v.dtype in [
+                    #         torch.float32,
+                    #         torch.float64,
+                    #         torch.float16,
+                    #         torch.bfloat16,
+                    #     ]:
+                    #         v.requires_grad = True
                     # labels = inputs["input_ids"].clone()
 
                     # DEBUG.stamp()
@@ -254,7 +238,6 @@ def main(
 
                     # weight update
                     model_engine.step()
-
                     global_step += 1
                     # logger({"train/loss": loss, "global_step": global_step})
                     # logger(
@@ -275,8 +258,6 @@ def main(
 
     if local_rank == 0:
         PROF.export(output_dir / "trace.json")
-
-    print(dsp.config["zero_optimization"])
 
 
 if __name__ == "__main__":

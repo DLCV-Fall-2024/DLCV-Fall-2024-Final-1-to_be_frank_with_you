@@ -30,7 +30,9 @@ class LlavaPEFT(torch.nn.Module):
             # torch_dtype=torch.bfloat16,
         )
 
-        processor = AutoImageProcessor.from_pretrained(model_params.model_id)
+        processor = AutoImageProcessor.from_pretrained(
+            model_params.model_id, use_fast=True
+        )
         self.processor = processor
 
         # Remove projector layers from lora for direct finetuning
@@ -75,12 +77,13 @@ class LlavaPEFT(torch.nn.Module):
             if param.requires_grad:
                 print(f"Activating {name} for training.")
 
-    def transform(self, img: Image, prompt: str):
+    def transform(self, img: Image, prompt: str, **kwargs):
         inputs = self.processor(
             img,
             return_tensors="pt",  # return as pytorch tensors
             padding=True,
             do_rescale=False,  # since we already rescale color range to [0, 1] when loading dataset
+            **kwargs,
         )
 
         return inputs
