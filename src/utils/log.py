@@ -1,9 +1,13 @@
+from typing import Optional
+
 import inspect
 import time
 from collections import defaultdict, deque
 
 import numpy as np
 import torch
+from pathlib import Path
+from torch.profiler import profile as TorchProfiler, ProfilerActivity
 
 try:
     import wandb
@@ -283,3 +287,38 @@ class PerformanceMonitor:
             self.log_warning(elapsed_time, key=key)
 
         self.context_key = None
+
+
+class Profiler:
+    def __init__(
+        self, profile: bool = False, **kwargs
+    ):
+        if profile:
+            self.profiler = TorchProfiler(
+                activities=(
+                    [
+                        ProfilerActivity.CPU,
+                        ProfilerActivity.CUDA,
+                        ProfilerActivity.MTIA,
+                        ProfilerActivity.PrivateUse1,
+                        ProfilerActivity.XPU,
+                    ]
+                ),
+                record_shapes=True,
+                **kwargs,
+            )
+        else:
+            self.profiler = None
+
+    def __enter__(self):
+        if self.profiler is not None:
+            self.profiler.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.profiler is not None:
+            self.profiler.__exit__(exc_type, exc_val, exc_tb)
+
+    def export(self, output_path: str | Path):
+        if self.profiler is not None:
+            self.profiler.export_chrome_trace(str(output_path))

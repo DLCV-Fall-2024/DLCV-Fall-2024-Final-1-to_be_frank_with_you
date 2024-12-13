@@ -14,7 +14,7 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from tqdm import tqdm
 
-from utils.log import pretty_print
+from src.utils.log import pretty_print
 
 
 @dataclass_json
@@ -76,7 +76,8 @@ class DiscDataset(Dataset):
         self.trainer_input_kwargs = trainer_input_kwargs
 
     def __len__(self):
-        return len(self.config)
+        # return len(self.config)
+        return 8000
 
     def __getitem__(self, idx: int):
         if self.use_trainer:

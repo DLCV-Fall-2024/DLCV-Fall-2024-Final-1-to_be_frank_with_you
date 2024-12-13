@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Type, TypeVar, cast, Any, Dict
+from typing import Optional, Tuple, List, Type, TypeVar, cast, Any, Dict
 
 from pathlib import Path
 import time
@@ -7,6 +7,12 @@ from omegaconf import OmegaConf
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+
+
+def get_config_path(root: Path, exp_name: str) -> Path:
+    configs_dir = root / "configs"
+    config_path = configs_dir / f"{exp_name}.yaml"
+    return config_path
 
 
 def create_config(root: Path, exp_name: str, default_config: Any) -> Tuple[bool, Path]:
@@ -40,16 +46,35 @@ C = TypeVar("C")
 def load_config(
     name: str,
     Config: Type[C],
-    config_path: Optional[Path | str] = None,
+    auto_create: bool = False,
+    external_defaults: Tuple[List[str], str] = [],
 ) -> Tuple[Optional[C], Path, Path, Path, Path]:
     # Initialize default configuration
     default_config = OmegaConf.structured(Config)
 
-    new_config, default_config_path = create_config(ROOT_DIR, name, default_config)
-    if new_config:
+    configs_dir = ROOT_DIR / "configs"
+    config_path = configs_dir / f"{name}.yaml"
+
+    configs_dir.mkdir(parents=True, exist_ok=True)
+
+    if not config_path.exists():
+        if auto_create:
+            # Add external defaults
+            for keys, external_config_name in external_defaults:
+                external_config = OmegaConf.load(
+                    configs_dir / f"{external_config_name}.yaml"
+                )
+                target = default_config
+                for key in keys[:-1]:
+                    if key not in target:
+                        target[key] = {}
+                    target = target[key]
+                target[keys[-1]] = external_config
+
+            with config_path.open("w") as f:
+                OmegaConf.save(default_config, f)
+
         return None, None, None, None, None
-    if config_path is None:
-        config_path = default_config_path
 
     # Create experiment assets (folders and default configuration)
     timestamp = time.strftime("%m%d_%H%M%S")

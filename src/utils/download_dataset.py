@@ -5,7 +5,7 @@ from torchvision import transforms
 from torchvision.transforms import ToPILImage
 from torchvision.utils import make_grid
 
-from utils.log import pretty_print
+from src.utils.log import pretty_print
 
 # Define the dataset and transformation
 
