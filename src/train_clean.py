@@ -198,7 +198,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
                     for name, param in model.named_parameters():
                         if param.requires_grad and param.grad is None:
                             print(f"Warning: {name}.grad is {param.grad}.")
-                global_step += 1
+                global_step += op.batch_size
                 accum_loss += loss.item()
                 # if global_step % accum_steps == 0:
                 optimizer.step()
