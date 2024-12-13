@@ -57,13 +57,14 @@ def main(
 
     world_size = torch.cuda.device_count()
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # torch.cuda.set_per_process_memory_fraction(0.53)
 
     if config.liger_kernel:
         apply_liger_kernel_to_llama()
 
     model = LlavaPEFT(
         model_params=mp,
-        gradient_checkpointing=False,
+        gradient_checkpointing=True,
         lora_config=mp.lora_config,
     )
     addition_config["model_struct"] = model.get_model_struct()
@@ -201,7 +202,7 @@ def main(
                     inputs = model.transform(
                         batch["image"],
                         prompt=batch["prompt"],
-                    ).to(device=local_rank)
+                    ).to(device=local_rank, dtype=torch.bfloat16)
 
                     for k, v in inputs.items():
                         if torch.is_tensor(v) and v.dtype in [
