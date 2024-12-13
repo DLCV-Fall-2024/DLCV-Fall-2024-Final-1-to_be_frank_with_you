@@ -35,8 +35,8 @@ def main(
     from torch.utils.data import DataLoader
     from torch.utils.data import DistributedSampler
 
-    # from src.models.llava import LlavaPEFT
-    from src.models.llava_ds_test import LlavaPEFT
+    from src.models.llava import LlavaPEFT
+    # from src.models.llava_ds_test import LlavaPEFT
     from src.utils.experiment import dump_additional_config
     from src.utils import default
     from src.utils.dataset import DiscDataset
@@ -47,8 +47,6 @@ def main(
         init_logger,
         init_wandb,
     )
-
-    from torch.profiler import profile, record_function, ProfilerActivity
 
     addition_config = {}
     mp = config.model
@@ -69,9 +67,6 @@ def main(
         lora_config=mp.lora_config,
     )
     addition_config["model_struct"] = model.get_model_struct()
-
-    transform = model.transform
-    processor = model.processor
 
     # trainable_params, all_param = model.llava.get_nb_trainable_parameters()
     # print(
@@ -193,18 +188,18 @@ def main(
     ###################### Training ######################
 
     # DeepSpeed read config from file
-    model_engine, _, _, _ = deepspeed.initialize(
-        config=OmegaConf.to_container(dsp.config, resolve=True),
-        model=model,
-    )
+    # model_engine, _, _, _ = deepspeed.initialize(
+    #     config=OmegaConf.to_container(dsp.config, resolve=True),
+    #     model=model,
+    # )
 
-    with Profiler(profile=config.profile) as PROF:
+    with Profiler(profile=config.profile) as PROFILER:
         for epoch in range(dsp.epochs):
             train_bar = tqdm(train_loader)
             train_bar.set_description(f"[Train {epoch}/{dsp.epochs}]")
             for ids, batch in train_bar:
                 with DEBUG:
-                    inputs = transform(
+                    inputs = model.transform(
                         batch["image"],
                         prompt=batch["prompt"],
                     ).to(device=local_rank)
@@ -214,22 +209,22 @@ def main(
                         device=local_rank,
                     )
 
-                    # for k, v in inputs.items():
-                    #     if torch.is_tensor(v) and v.dtype in [
-                    #         torch.float32,
-                    #         torch.float64,
-                    #         torch.float16,
-                    #         torch.bfloat16,
-                    #     ]:
-                    #         v.requires_grad = True
-                    # labels = inputs["input_ids"].clone()
+                    for k, v in inputs.items():
+                        if torch.is_tensor(v) and v.dtype in [
+                            torch.float32,
+                            torch.float64,
+                            torch.float16,
+                            torch.bfloat16,
+                        ]:
+                            v.requires_grad = True
+                    labels = inputs["input_ids"].clone()
 
-                    # DEBUG.stamp()
-                    # DEBUG.set_params(**{"labels": labels})
+                    DEBUG.stamp()
+                    DEBUG.set_params(**{"labels": labels})
 
-                    outputs = model_engine.forward(inputs)
-                    loss = outputs.loss
-                    model_engine.backward(loss)
+                    # outputs = model_engine.forward(inputs)
+                    # loss = outputs.loss
+                    # model_engine.backward(loss)
 
                     if config.debug:
                         for name, param in model.named_parameters():
@@ -237,7 +232,7 @@ def main(
                                 print(f"Warning: {name}.grad is {param.grad}.")
 
                     # weight update
-                    model_engine.step()
+                    # model_engine.step()
                     global_step += 1
                     # logger({"train/loss": loss, "global_step": global_step})
                     # logger(
@@ -247,17 +242,17 @@ def main(
                     #     }
                     # )
 
-                    # DEBUG.stamp()
-                    # DEBUG.stamp()
-                    # DEBUG.log_performance(log_per=20)
-                    del outputs, loss
+                    DEBUG.stamp()
+                    DEBUG.stamp()
+                    DEBUG.log_performance(log_per=20)
+                    # del outputs, loss
 
                     if timer.timesup():
-                        model_engine.save_checkpoint(checkpoint_dir)
+                        # model_engine.save_checkpoint(checkpoint_dir)
                         timer.reset()
 
     if local_rank == 0:
-        PROF.export(output_dir / "trace.json")
+        PROFILER.export(output_dir / "trace.json")
 
 
 if __name__ == "__main__":

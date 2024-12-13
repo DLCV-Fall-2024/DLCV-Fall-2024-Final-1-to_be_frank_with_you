@@ -124,7 +124,6 @@ class LlavaPEFT(torch.nn.Module):
             model_params.model_id
         )
 
-        processor.patch_size = model_params.patch_size
         processor.vision_feature_select_strategy = (
             model_params.vision_feature_select_strategy
         )
@@ -167,13 +166,14 @@ class LlavaPEFT(torch.nn.Module):
         self.llava = get_peft_model(llava, lora_config)
         self.activate_only_lora()
 
+        estimate_zero3_model_states_mem_needs_all_live(self.llava)
+
         # Activate finetuning the encoder
         for name, param in llava.named_parameters():
             if any([name.startswith(prefix) for prefix in no_lora_but_FF_prefix]):
                 param.requires_grad = True
 
         self.mp = model_params
-
 
     def get_model_struct(self):
         return str(self.llava)
@@ -182,13 +182,14 @@ class LlavaPEFT(torch.nn.Module):
         for name, param in self.llava.named_parameters():
             param.requires_grad = "lora" in name
 
-    def transform(self, img: Image, prompt: str):
+    def transform(self, img: Image, prompt: str, **kwargs):
         inputs = self.processor(
             img,
             text=prompt,
             return_tensors="pt",  # return as pytorch tensors
             padding=True,
             do_rescale=False,  # since we already rescale color range to [0, 1] when loading dataset
+            **kwargs,
         )
 
         if self.mp.change_encoder:
