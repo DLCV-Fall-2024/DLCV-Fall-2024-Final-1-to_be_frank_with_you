@@ -20,7 +20,6 @@ class ModelParams:
     conditional_fuser: bool = True
     condition_dropout: float = 0.3
 
-    patch_size: int = 14
     vision_feature_select_strategy: str = "full"  # "default" or "full"
     gradient_checkpointing: bool = True
     lora_config: dict = field(

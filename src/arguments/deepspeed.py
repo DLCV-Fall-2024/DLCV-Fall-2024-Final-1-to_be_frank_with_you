@@ -14,6 +14,8 @@ class ModelParams:
     segmentation_model_id: str = "shi-labs/oneformer_ade20k_dinat_large"
 
     fuser_id: str = "gemini"
+    conditional_fuser: bool = True
+    condition_dropout: float = 0.3
 
     vision_feature_select_strategy: str = "full"  # "default" or "full"
     gradient_checkpointing: bool = True
