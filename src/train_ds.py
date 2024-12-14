@@ -16,7 +16,7 @@ def main(
 
     dist.init_process_group()
     world_size = dist.get_world_size()
-    device = deepspeed.get_accelerator().device
+    device = f"{deepspeed.get_accelerator().device_name()}:{local_rank}"
 
     from src.arguments.deepspeed import Config
     from src.utils.experiment import load_config

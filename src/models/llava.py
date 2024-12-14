@@ -50,12 +50,12 @@ class MergedImageProcessor(BaseImageProcessor):
         inputs = self.processors[0](images, **kwargs)
         image_shape = inputs["pixel_values"].shape
         inputs["pixel_values"] = inputs["pixel_values"].to(
-            self.device, self.torch_dtype
+            device=self.device, dtype=self.torch_dtype
         )
         auxiliary_inputs = []
         for processor in self.processors[1:]:
             aux_inputs = processor(images, **kwargs)
-            aux_inputs.to(self.device, self.torch_dtype)
+            aux_inputs.to(device=self.device, dtype=self.torch_dtype)
             auxiliary_inputs.append(aux_inputs)
 
         inputs["aux_inputs"] = auxiliary_inputs
@@ -142,7 +142,7 @@ class VisionTower(torch.nn.Module):
             conditional_fuser=model_params.conditional_fuser,
             # num_heads=self.encoder.model.config.num_attention_heads,
             # mlp_hidden_dim=self.encoder.model.config.mlp_hidden_dim,
-        ).to(device, torch_dtype)
+        ).to(device=device, dtype=torch_dtype)
 
         self.conditional_fuser = model_params.conditional_fuser
         self.condition_dropout = model_params.condition_dropout
@@ -150,7 +150,7 @@ class VisionTower(torch.nn.Module):
             self.AdaLNZero = AdaLNZero(
                 hidden_dim=self.encoder.model.config.hidden_size,
                 condition_dim=language_embeds_dim,
-            ).to(device, torch_dtype)
+            ).to(device=device, dtype=torch_dtype)
 
         # Create merged image processor
         self.processor = MergedImageProcessor(
@@ -171,11 +171,11 @@ class VisionTower(torch.nn.Module):
 
                 if feature.use_pred:
                     preprocess = self.processors[0](
-                        feature.predictions.to(torch.float32),
+                        feature.predictions.to(dtype=torch.float32),
                         return_tensors="pt",  # return as pytorch tensors
                     )
                     preprocess = preprocess.to(
-                        image_feature.device, image_feature.dtype
+                        device=image_feature.device, dtype=image_feature.dtype
                     )
                     encoded = self.encoder(preprocess["pixel_values"], **kwargs)
                     wanted_feature = encoded.hidden_states[self.vision_feature_layer]
