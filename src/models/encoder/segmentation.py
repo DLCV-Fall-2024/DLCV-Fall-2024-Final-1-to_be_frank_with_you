@@ -118,7 +118,7 @@ class SegmentationEncoder(VisionEncoder):
                 except KeyError:
                     pred[mask] = IGNORE_VALUE
             pred = pred.to(self.device)
-            color_pred = self.id2rgb[pred]
+            color_pred = self.id2rgb[pred.long()]
             color_pred = color_pred.permute(2, 0, 1)
             predictions.append(color_pred)
 
