@@ -31,13 +31,23 @@ else:
     ...
 ```
 
+## DeepSpeed
+
+To properly install the package `mpi4py` required by DeepSpeed, you need to install `libmpich-dev` first, e.g.:
+```bash
+sudo apt install -y libmpich-dev
+```
 
 # Run Training Code
 
 ```bash
-# Only creates config file and assets in the first run
+# Non-distributed training
 python -m src.train_clean <RUN_NAME>
+# Distributed training with DeepSpeed
+deepspeed --module src.train_ds <RUN_NAME>
 ```
+
+> The scripts will create a default configuration in configs/<RUN_NAME>.yaml and exit for the first time.
 
 ### Assets Structure
 
@@ -49,5 +59,4 @@ outputs/
     ├── checkpoint/
     ├── log/
     └── config.yaml  # Additional info
-...
 ```
