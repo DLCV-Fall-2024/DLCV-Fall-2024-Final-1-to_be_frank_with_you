@@ -1,6 +1,12 @@
+import os
+from pathlib import Path
+
 import typer
 
 app = typer.Typer(pretty_exceptions_show_locals=False)
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+import warnings
 
 
 @app.command()
@@ -13,20 +19,22 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
         print("Configuration created")
         return
 
-    from pathlib import Path
-
     import torch
     from liger_kernel.transformers import apply_liger_kernel_to_llama
     from omegaconf import OmegaConf
     from pytorch_lightning import seed_everything
     from torch.utils.data import DataLoader
     from tqdm import tqdm
+    from transformers.utils import logging
+
+    logging.set_verbosity_error()
 
     from src.models.llava import LlavaPEFT
+    from src.models.utils import ensure_all_on_device, ensure_all_same_dtype
     from src.utils.experiment import dump_additional_config
     from src.utils import default
     from src.utils.dataset import DiscDataset
-    from src.utils.log import PerformanceMonitor, Timer, init_logger, init_wandb
+    from src.utils.log import PerformanceMonitor, Timer, init_logger, init_wandb, print_once
 
     addition_config = {}
     mp = config.model
@@ -48,7 +56,11 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
         model_params=mp,
         gradient_checkpointing=not use_cache,
         lora_config=mp.lora_config,
+        device=device,
+        torch_dtype=torch.bfloat16,
     )
+    # ensure_all_on_device(model, device)
+    # ensure_all_same_dtype(model, torch.bfloat16)
     addition_config["model_struct"] = model.get_model_struct()
 
     transform = model.transform
@@ -107,7 +119,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     accum_steps = getattr(op, "accumulation_steps", 1)
     print(f"Effective batch size: {op.batch_size * accum_steps}")
     print(f"Using {device} device")
-
+    gradient_clip_val = getattr(op, "gradient_clip_val", 1.0)
     ##########################################################
 
     project_name = default(config.project_name, "DLCV-FINAL-Traffic-LLaVA")
@@ -122,6 +134,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
             config=OmegaConf.to_container(config, resolve=True),
             log_dir=log_dir,
             local_rank=local_rank if __USE_DEEPSPEED__ else None,
+            entity="DLCV-Final",
         )
     logger = init_logger(local_rank=local_rank if __USE_DEEPSPEED__ else None)
     print(type(logger))
@@ -146,31 +159,37 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
                 inputs = transform(batch["image"], prompt=batch["prompt"]).to(
                     device, torch.bfloat16
                 )
-                for k, v in inputs.items():
-                    if torch.is_tensor(v) and v.dtype in [
-                        torch.float32,
-                        torch.float64,
-                        torch.float16,
-                        torch.bfloat16,
-                    ]:
-                        v.requires_grad = True
+
                 labels = inputs["input_ids"].clone()
 
                 DEBUG.stamp()
-                DEBUG.set_params(**{"labels": labels})
-                out = model.forward(
-                    **inputs,
-                    labels=labels,
-                    vision_feature_select_strategy=mp.vision_feature_select_strategy,
-                    use_cache=use_cache,
-                )
+
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        message="None of the inputs have requires_grad=True. Gradients will be None",
+                    )
+                    out = model.forward(
+                        **inputs,
+                        labels=labels,
+                        vision_feature_select_strategy=mp.vision_feature_select_strategy,
+                        use_cache=use_cache,
+                    )
+                DEBUG.stamp()
+
+                DEBUG.set_params(**{"loss": out.loss})
                 loss = out.loss  # / accum_steps
                 loss.backward()
+
+                # gradient clipping
+                torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip_val)
                 if pp.debug:
                     for name, param in model.named_parameters():
-                        if param.requires_grad and param.grad is None:
-                            print(f"Warning: {name}.grad is {param.grad}.")
-                global_step += 1
+                        if param.requires_grad and (
+                            param.grad is None or torch.isnan(param.grad).any()
+                        ):
+                            print_once(f"Warning: {name}.grad is {param.grad}.")
+                global_step += op.batch_size
                 accum_loss += loss.item()
                 # if global_step % accum_steps == 0:
                 optimizer.step()
@@ -206,9 +225,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
                     inputs = transform(batch["image"], prompt=batch["prompt"]).to(
                         device
                     )
-                    labels = processor.tokenizer(
-                        batch["labels"], return_tensors="pt", padding=True
-                    ).input_ids.to(device)
+                    labels = inputs["input_ids"].clone()
                     DEBUG.stamp()
                     DEBUG.set_params(**{"labels": labels})
 

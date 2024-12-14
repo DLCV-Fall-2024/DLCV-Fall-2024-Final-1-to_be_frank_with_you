@@ -242,7 +242,7 @@ def main():
                     if torch.is_tensor(v) and v.dtype in [
                         torch.float32,
                         torch.float64,
-                        torch.float16,
+                        torch.bfloat16,
                         torch.bfloat16,
                     ]:
                         v.requires_grad = True

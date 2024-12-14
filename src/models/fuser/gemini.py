@@ -29,7 +29,8 @@ class GeminiSinglePair(nn.Module):
         self, image_feature: torch.Tensor, auxiliary_feature: torch.Tensor
     ) -> torch.Tensor:
         # batch_size = image_tokens.size(0)
-
+        main_device = image_feature.device
+        auxiliary_feature = auxiliary_feature.to(main_device)
         # Concatenate image and depth tokens (along sequence dimension)
         combined_feature = torch.cat(
             [image_feature, auxiliary_feature], dim=1
@@ -88,7 +89,13 @@ class GeminiSinglePair(nn.Module):
 
 class GeminiFuser(Fuser):
     def __init__(
-        self, n_auxiliary_features: int, d_model=768, num_heads=8, mlp_hidden_dim=512
+        self,
+        n_auxiliary_features: int,
+        d_model=768,
+        num_heads=8,
+        mlp_hidden_dim=512,
+        conditional_fuser=False,
+        **kwargs,
     ):
         super().__init__(n_auxiliary_features=n_auxiliary_features)
 
@@ -96,18 +103,24 @@ class GeminiFuser(Fuser):
             [
                 GeminiSinglePair(
                     d_model=d_model, num_heads=num_heads, mlp_hidden_dim=mlp_hidden_dim
-                ).bfloat16()
+                )
                 for _ in range(self.n_auxiliary_features)
             ]
         )
+        self.conditional_fuser = conditional_fuser
 
     def forward(
-        self, image_feature: torch.Tensor, auxiliary_features: List[torch.Tensor]
+        self,
+        image_feature: torch.Tensor,
+        auxiliary_features: List[torch.Tensor],
     ) -> torch.Tensor:
         fused_features = []
         for i, fuser in enumerate(self.fusers):
             fused_features.append(fuser(image_feature, auxiliary_features[i]))
 
+        if self.conditional_fuser:
+            # Return all fused features to be conditioned on text input
+            return fused_features
         fusion = 0
         for fused_feature in fused_features:
             fusion += fused_feature

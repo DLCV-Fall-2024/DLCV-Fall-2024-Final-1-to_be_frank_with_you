@@ -157,7 +157,7 @@ def main():
     for ids, batch in tqdm(inference_loader):
         with DEBUG:
             inputs = transform(batch["image"], prompt=batch["prompt"]).to(
-                device, torch.float16
+                device, torch.bfloat16
             )
             DEBUG.stamp()
             DEBUG.set_params(**{"ids": ids})
