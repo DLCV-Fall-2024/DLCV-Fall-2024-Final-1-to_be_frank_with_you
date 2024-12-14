@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, List, Type, TypeVar, cast, Any, Dict
+from typing import Optional, Tuple, List, Type, TypeVar, cast, Any, Dict, Callable
 
 from pathlib import Path
 import time
@@ -7,25 +7,6 @@ from omegaconf import OmegaConf
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
-
-
-def get_config_path(root: Path, exp_name: str) -> Path:
-    configs_dir = root / "configs"
-    config_path = configs_dir / f"{exp_name}.yaml"
-    return config_path
-
-
-def create_config(root: Path, exp_name: str, default_config: Any) -> Tuple[bool, Path]:
-    configs_dir = root / "configs"
-    config_path = configs_dir / f"{exp_name}.yaml"
-    configs_dir.mkdir(parents=True, exist_ok=True)
-
-    config_exists = config_path.exists()
-    if not config_exists:
-        with config_path.open("w") as config_file:
-            OmegaConf.save(default_config, config_file)
-
-    return not config_exists, config_path
 
 
 def create_assets(root: Path, exp_name: str) -> Tuple[Path, Path, Path]:
@@ -46,6 +27,7 @@ C = TypeVar("C")
 def load_config(
     name: str,
     Config: Type[C],
+    sync_fn: Callable[[], None] = None,
     auto_create: bool = False,
     external_defaults: Tuple[List[str], str] = [],
 ) -> Tuple[Optional[C], Path, Path, Path, Path]:
@@ -58,6 +40,8 @@ def load_config(
     configs_dir.mkdir(parents=True, exist_ok=True)
 
     if not config_path.exists():
+        if sync_fn is not None:
+            sync_fn()
         if auto_create:
             # Add external defaults
             for keys, external_config_name in external_defaults:

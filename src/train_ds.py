@@ -11,14 +11,22 @@ def main(
     name: str = typer.Argument(..., help="Name of the experiment"),
     local_rank: int = typer.Option(..., "--local_rank", help="Local rank"),
 ):
+    import deepspeed
+    from torch import distributed as dist
+
+    dist.init_process_group()
+    world_size = dist.get_world_size()
+    device = deepspeed.get_accelerator().device
+
     from src.arguments.deepspeed import Config
     from src.utils.experiment import load_config
 
     assets = load_config(
         name,
         Config,
-        auto_create=local_rank == 0,
         external_defaults=[(["deepspeed", "config"], "deepspeed_default")],
+        sync_fn=lambda: dist.barrier(),
+        auto_create=local_rank == 0,
     )
     config, timestamp, output_dir, checkpoint_dir, log_dir = assets
     if config is None:
@@ -31,8 +39,6 @@ def main(
     from tqdm import tqdm
 
     import torch
-    import deepspeed
-    from deepspeed import get_accelerator
     from liger_kernel.transformers import apply_liger_kernel_to_llama
     from pytorch_lightning import seed_everything
     from torch.utils.data import DataLoader
@@ -51,14 +57,12 @@ def main(
         print_once,
     )
 
-    addition_config = {}
     mp = config.model
     dp = config.dataset
     dsp = config.deepspeed
+    addition_config = {}
 
     seed_everything(config.seed)
-    device = get_accelerator().device
-    world_size = torch.cuda.device_count()
 
     if config.liger_kernel:
         apply_liger_kernel_to_llama()
