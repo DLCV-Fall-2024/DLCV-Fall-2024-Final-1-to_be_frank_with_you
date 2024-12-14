@@ -1,13 +1,10 @@
-import os
 from dataclasses import dataclass, field
-from typing import Optional, Any, Dict
+from typing import Optional, Dict
 
 
 @dataclass
 class ModelParams:
     model_id: str = "llava-hf/llava-1.5-7b-hf"
-
-    change_encoder: bool = False
     encoder_id: str = "facebook/dinov2-large"
 
     share_vit: bool = False
@@ -18,7 +15,6 @@ class ModelParams:
 
     fuser_id: str = "gemini"
 
-    # patch_size: int = 14
     vision_feature_select_strategy: str = "full"  # "default" or "full"
     gradient_checkpointing: bool = True
     lora_config: dict = field(
