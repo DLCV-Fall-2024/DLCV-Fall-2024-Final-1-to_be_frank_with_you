@@ -1,12 +1,15 @@
 import typer
+import os
 
 app = typer.Typer(pretty_exceptions_show_locals=False)
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 @app.command()
 def main(
     name: str = typer.Argument(..., help="Name of the experiment"),
-    local_rank: int = typer.Option(0, "--local_rank", help="Local rank"),
+    local_rank: int = typer.Option(..., "--local_rank", help="Local rank"),
 ):
     from src.arguments.deepspeed import Config
     from src.utils.experiment import load_config
@@ -22,21 +25,20 @@ def main(
         print("Configuration created")
         return
 
-    import os
+    import warnings
     from pathlib import Path
-    import json
     from omegaconf import OmegaConf
     from tqdm import tqdm
 
     import torch
     import deepspeed
+    from deepspeed import get_accelerator
     from liger_kernel.transformers import apply_liger_kernel_to_llama
     from pytorch_lightning import seed_everything
     from torch.utils.data import DataLoader
     from torch.utils.data import DistributedSampler
 
     from src.models.llava import LlavaPEFT
-    # from src.models.llava_ds_test import LlavaPEFT
     from src.utils.experiment import dump_additional_config
     from src.utils import default
     from src.utils.dataset import DiscDataset
@@ -46,6 +48,7 @@ def main(
         Profiler,
         init_logger,
         init_wandb,
+        print_once,
     )
 
     addition_config = {}
@@ -54,10 +57,8 @@ def main(
     dsp = config.deepspeed
 
     seed_everything(config.seed)
-
+    device = get_accelerator().device
     world_size = torch.cuda.device_count()
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # torch.cuda.set_per_process_memory_fraction(0.53)
 
     if config.liger_kernel:
         apply_liger_kernel_to_llama()
@@ -66,23 +67,15 @@ def main(
         model_params=mp,
         gradient_checkpointing=True,
         lora_config=mp.lora_config,
+        device=device,
+        torch_dtype=torch.bfloat16,
     )
     addition_config["model_struct"] = model.get_model_struct()
 
-    # trainable_params, all_param = model.llava.get_nb_trainable_parameters()
-    # print(
-    #     f"Trainable: {trainable_params/1e6:.4f}M | All: {all_param/1e6:.4f}M | Ratio: {trainable_params/all_param * 100:.3f}%"
-    # )
-    # WARNING: Test
-    total = 0
-    for param in model.parameters():
-        if param.requires_grad:
-            total += param.numel()
-    print(f"Total trainable parameters: {total / 1e6:.4f}M")
-
-    # for name, param in model.named_parameters():
-    #     if not (param.requires_grad == ("lora" in name)):
-    #         print(f"Warning: {name}.required_grad= {param.requires_grad}.")
+    trainable_params, all_param = model.llava.get_nb_trainable_parameters()
+    print(
+        f"Trainable: {trainable_params/1e6:.4f}M | All: {all_param/1e6:.4f}M | Ratio: {trainable_params/all_param * 100:.3f}%"
+    )
 
     dump_additional_config(addition_config, output_dir)
     del addition_config
@@ -188,13 +181,16 @@ def main(
 
     ###################### Training ######################
 
-    model_engine, _, _, _ = deepspeed.initialize(
+    model_engine, _, _, scheduler = deepspeed.initialize(
         config=OmegaConf.to_container(dsp.config, resolve=True),
         model=model,
     )
+    model_engine: deepspeed.DeepSpeedEngine
 
     with Profiler(profile=config.profile) as PROFILER:
         for epoch in range(dsp.epochs):
+            model_engine.train()
+
             train_bar = tqdm(train_loader)
             train_bar.set_description(f"[Train {epoch}/{dsp.epochs}]")
             for ids, batch in train_bar:
@@ -202,50 +198,51 @@ def main(
                     inputs = model.transform(
                         batch["image"],
                         prompt=batch["prompt"],
-                    ).to(device=local_rank, dtype=torch.bfloat16)
-
-                    for k, v in inputs.items():
-                        if torch.is_tensor(v) and v.dtype in [
-                            torch.float32,
-                            torch.float64,
-                            torch.float16,
-                            torch.bfloat16,
-                        ]:
-                            v.requires_grad = True
+                    ).to(device=device, dtype=torch.bfloat16)
                     labels = inputs["input_ids"].clone()
 
                     DEBUG.stamp()
-                    DEBUG.set_params(**{"labels": labels})
 
-                    outputs = model_engine.forward(
-                        **inputs,
-                        labels=labels,
-                        vision_feature_select_strategy=mp.vision_feature_select_strategy,
-                        use_cache=True,
-                    )
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings(
+                            "ignore",
+                            message="None of the inputs have requires_grad=True. Gradients will be None",
+                        )
+                        outputs = model_engine.forward(
+                            **inputs,
+                            labels=labels,
+                            vision_feature_select_strategy=mp.vision_feature_select_strategy,
+                            use_cache=True,
+                        )
+                    DEBUG.stamp()
+                    DEBUG.set_params(**{"loss": outputs.loss})
+
                     loss = outputs.loss
                     model_engine.backward(loss)
 
                     if config.debug:
                         for name, param in model.named_parameters():
-                            if param.requires_grad and param.grad is None:
-                                print(f"Warning: {name}.grad is {param.grad}.")
+                            if param.requires_grad and (
+                                param.grad is None or torch.isnan(param.grad).any()
+                            ):
+                                print_once(f"Warning: {name}.grad is {param.grad}.")
 
                     # weight update
                     model_engine.step()
                     global_step += 1
-                    # logger({"train/loss": loss, "global_step": global_step})
-                    # logger(
-                    #     {
-                    #         "train/lr": scheduler.get_last_lr(),
-                    #         "global_step": global_step,
-                    #     }
-                    # )
+                    logger({"train/loss": loss, "global_step": global_step})
+                    if global_step % dsp.accumulation_steps == 0:
+                        logger(
+                            {
+                                "train/lr": scheduler.get_last_lr(),
+                                "global_step": global_step,
+                            }
+                        )
 
                     DEBUG.stamp()
                     DEBUG.stamp()
                     DEBUG.log_performance(log_per=20)
-                    del outputs, loss
+                    del outputs, loss, labels
 
                     if timer.timesup():
                         model_engine.save_checkpoint(checkpoint_dir)
