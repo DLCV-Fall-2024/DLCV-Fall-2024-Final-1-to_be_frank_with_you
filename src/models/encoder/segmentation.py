@@ -109,14 +109,14 @@ class SegmentationEncoder(VisionEncoder):
             segmentation_info = result["segments_info"]
             infos = {v["id"]: v["label_id"] for v in segmentation_info}
 
-            infos[0] = IGNORE_VALUE
             pred = torch.zeros_like(segmentation)
             label_ids = torch.unique(segmentation).tolist()
             for label_id in label_ids:
                 mask = segmentation == label_id
-                pred[mask] = infos[label_id]
-            pred[pred < 0] = IGNORE_VALUE
-            pred[pred > 255] = IGNORE_VALUE
+                try:
+                    pred[mask] = infos[label_id]
+                except KeyError:
+                    pred[mask] = IGNORE_VALUE
             pred = pred.to(self.device)
             color_pred = self.id2rgb[pred]
             color_pred = color_pred.permute(2, 0, 1)
