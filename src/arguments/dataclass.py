@@ -19,12 +19,14 @@ class ModelParams:
     fuser_id: str = "gemini"
     conditional_fuser: bool = True
     condition_dropout: float = 0.3
-    no_lora_but_FF_prefix: List[str] = [
-        "multi_modal_projector",
-        "fuser",
-        "vision_tower.AdaLNZero",
-        "auxiliary_projectors",
-    ]
+    no_lora_but_FF_prefix: List[str] = field(
+        default_factory=lambda: [
+            "multi_modal_projector",
+            "fuser",
+            "vision_tower.AdaLNZero",
+            "auxiliary_projectors",
+        ]
+    )
     patch_size: int = 14
     vision_feature_select_strategy: str = "full"  # "default" or "full"
     gradient_checkpointing: bool = True
@@ -85,3 +87,24 @@ class Config:
     pipeline: PipelineParams = field(default_factory=PipelineParams)
     dataset: DatasetParams = field(default_factory=DatasetParams)
     optimization: OptimizationParams = field(default_factory=OptimizationParams)
+
+
+@dataclass
+class GenerateParams:
+    config_path: Optional[str] = None
+    output_dir: Optional[str] = None
+    dataset_path: str = "data/test"
+
+    seed: int = 42
+    batch_size: int = 4
+    num_workers: int = 10
+    max_new_tokens: int = 1024
+    generation_config: dict = field(
+        default_factory=lambda: {
+            "do_sample": False,
+        }
+    )
+    use_regex: bool = True
+
+    model_config: Config = field(default_factory=Config)
+    model_path: Optional[str] = None

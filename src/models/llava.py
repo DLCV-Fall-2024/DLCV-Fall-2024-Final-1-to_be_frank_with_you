@@ -376,6 +376,12 @@ class LlavaPEFT(torch.nn.Module):
     def merge_adapter(self):
         self.llava.merge_adapter()
 
+    def merge_and_unload(self, inplace: bool = False):
+        if inplace:
+            self.llava = self.llava.merge_and_unload()
+            return self
+        return self.llava.merge_and_unload()
+
     def unmerge_adapter(self):
         self.llava.unmerge_adapter()
 
@@ -396,17 +402,38 @@ class LlavaPEFT(torch.nn.Module):
                 new_state_dict[key] = value
         self.llava.load_state_dict(new_state_dict, strict=strict, assign=assign)
 
+    def generate(
+        self,
+        pixel_values: torch.Tensor,
+        aux_inputs: Optional[List[torch.Tensor]] = None,
+        **inputs,
+    ):
+        if aux_inputs is not None:
+            inputs["pixel_values"] = [pixel_values, *aux_inputs]
+        else:
+            inputs["pixel_values"] = [pixel_values]
+
+        if self.conditional_fuser:
+            language_embeds = self.llava.base_model.get_input_embeddings()(
+                inputs["input_ids"]
+            )
+
+            language_embeds = language_embeds.mean(dim=1)
+            inputs["pixel_values"] = (inputs["pixel_values"], language_embeds)
+        return self.llava.generate(**inputs)
+
 
 if __name__ == "__main__":
+    from pathlib import Path
+
     from src.arguments.dataclass import Config
     from src.utils.experiment import load_config
 
-    name = "DINO_r256_3encoder_big_lr"
+    name = "DINO_r32_rgbd"
+    base_dir = Path("outputs/DINO_r32_rgbd_1214_164435")
     config, timestamp, output_dir, checkpoint_dir, log_dir = load_config(
         name, Config, auto_create=True
     )
-
-    from pathlib import Path
 
     import torch
     from transformers.utils import logging
@@ -437,7 +464,6 @@ if __name__ == "__main__":
         torch_dtype=torch.bfloat16,
     )
 
-    base_dir = Path("outputs/DINO_r256_3encoder_big_lr_1215_001147")
     model.load_state_dict(
         torch.load(
             base_dir / "checkpoint" / "latest.pt",
@@ -445,6 +471,7 @@ if __name__ == "__main__":
             weights_only=True,
         )
     )
+
     torch.save(
         model.enssetial_state_dict(),
         base_dir / "checkpoint" / "shrink.pt",

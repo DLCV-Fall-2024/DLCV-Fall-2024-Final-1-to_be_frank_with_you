@@ -1,130 +1,127 @@
-import argparse
-import cProfile
-import io
-import json
 import os
-import pstats
-import re
-import time
-from pathlib import Path
-from pstats import SortKey
 
-import datasets
-import torch
-from PIL import Image
-from pytorch_lightning import seed_everything
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-from transformers import (
-    AutoProcessor,
-    GenerationConfig,
-    LlavaForConditionalGeneration,
-    LlavaProcessor,
-)
+import typer
 
-from src.arguments import (
-    DatasetParams,
-    ModelParams,
-    OptimizationParams,
-    PipelineParams,
-    YamlArgsLoader,
-)
-from src.utils.dataset import DiscDataset
-from src.utils.log import PerformanceMonitor, Timer, pretty_print
+app = typer.Typer(pretty_exceptions_show_locals=False)
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+import warnings
 
 
-def arg_parser():
-    parser = argparse.ArgumentParser(
-        description="Inference script for Traffic specific LLaVA."
-    )
-    parser.add_argument(
-        "--output_file",
-        "-o",
-        type=str,
-        default="outputs/pred.json",
-        help="File to save the results.",
-    )
-    parser.add_argument(
-        "--config_file",
-        "-c",
-        type=str,
-        default="configs/inference.yaml",
-        help="Path to the configuration file.",
-    )
-    parser.add_argument(
-        "--max_new_tokens",
-        type=int,
-        default=1024,
-        help="Maximum number of new tokens to generate.",
-    )
-    parser.add_argument(
-        "--use_regex",
-        type=bool,
-        default=False,
-        help="Use regex to extract assistant reply. (default: False, use split)",
-    )
-    mp = ModelParams(parser)
-    dp = DatasetParams(parser)
-    pp = PipelineParams(parser)
-    op = OptimizationParams(parser)
-    args = parser.parse_args()
-    return args
+@app.command()
+def main(
+    model_path: str = typer.Argument(
+        ...,
+        help="Path to the model checkpoint.",
+    ),
+    ## TODO: We should improve the mechanism to auto find and load the model configuration file
+    config_file: str = typer.Argument(..., help="Path to the configuration file"),
+    output_dir: str = typer.Option(
+        "results", help="Directory to save the results", show_default=True
+    ),
+    infer_config_path: str = typer.Option(
+        "configs/inference/default.yaml", help="Path to the generation config file."
+    ),
+):
+    from pathlib import Path
 
+    from omegaconf import OmegaConf
 
-def main():
-    args = arg_parser()
+    from src.arguments.dataclass import Config, GenerateParams
+    from src.utils.experiment import load_config
 
-    yaml_file = Path(args.config_file)
-    if yaml_file.exists():
-        yaml_args = YamlArgsLoader(yaml_file)
-        yaml_args.overwrite_args(args)
-    seed_everything(args.seed)
+    config_path = Path(config_file)
+    config_name = config_path.stem
+    config, timestamp, _, _, _ = load_config(config_name, Config, auto_create=False)
+    if config is None:
+        raise FileNotFoundError("Configuration not found. Please create one.")
 
+    model_path: Path = Path(model_path)
+    assert model_path.exists(), f"Model checkpoint not found at {model_path}"
+
+    output_dir: Path = Path(output_dir)
+    infer_config_path: Path = Path(infer_config_path)
+
+    infer_config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    output_dir = output_dir / config_name / timestamp
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    infer_config: GenerateParams = OmegaConf.structured(GenerateParams)
+
+    if not infer_config_path.exists():
+        OmegaConf.save(infer_config, infer_config_path)
+    else:
+        infer_config: GenerateParams = OmegaConf.load(infer_config_path)
+    infer_config.config_path = str(config_path)
+    infer_config.output_dir = str(output_dir)
+    infer_config.model_path = str(model_path)
+    infer_config.model_config = config
+    OmegaConf.save(infer_config, str(output_dir / "config.yaml"))
+
+    ic = infer_config
+    import json
+    import re
+
+    import torch
+    from liger_kernel.transformers import apply_liger_kernel_to_llama
+    from pytorch_lightning import seed_everything
+    from torch.utils.data import DataLoader
+    from tqdm import tqdm
+    from transformers import GenerationConfig
+    from transformers.utils import logging
+
+    from src.models.llava import LlavaPEFT
+    from src.utils.dataset import DiscDataset
+    from src.utils.log import PerformanceMonitor, Timer, pretty_print
+
+    logging.set_verbosity_error()
+    mp = config.model
+
+    seed_everything(infer_config.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    ################## Below should be wrap in the class ######################
-    # TODO: (yck) modify this for a more general use case, e.g. load our own model
-    from peft import LoraConfig, get_peft_model, get_peft_model_state_dict
-    from transformers import Trainer, TrainingArguments
+    if config.liger_kernel:
+        apply_liger_kernel_to_llama()
+    ### DeepSpeed Compatibility ###
+    __USE_DEEPSPEED__ = False
+    local_rank = -1
+    use_cache = not (mp.gradient_checkpointing and not __USE_DEEPSPEED__)
 
-    model = LlavaForConditionalGeneration.from_pretrained(
-        args.model_id,
+    model = LlavaPEFT(
+        model_params=mp,
+        gradient_checkpointing=not use_cache,
+        lora_config=mp.lora_config,
+        device=device,
         torch_dtype=torch.bfloat16,
     )
-
-    lora_config = LoraConfig(**args.lora_config)
-    model = get_peft_model(model, lora_config)
+    print("Loading model from checkpoint: ", model_path)
     model.load_state_dict(
-        torch.load("runs/1209_212635/ckpts/1.pt", weights_only=True), strict=False
+        torch.load(
+            open(model_path, "rb"),
+            map_location=device,
+            weights_only=True,
+        )
     )
-    model = model.to(device)
+    print("Model loaded successfully")
 
-    processor = LlavaProcessor.from_pretrained(args.model_id)
-    processor.patch_size = args.patch_size
-    processor.vision_feature_select_strategy = args.vision_feature_select_strategy
+    transform = model.transform
+    processor = model.processor
 
-    transform = lambda img, prompt: processor(
-        img,
-        text=prompt,
-        return_tensors="pt",  # return as pytorch tensors
-        padding=True,
-        do_rescale=False,  # since we already rescale color range to [0, 1] when loading dataset
-    )
-    ###########################################################################
+    for param in model.parameters():
+        param.requires_grad = False
+    model.to(device, torch.bfloat16)
 
-    ### We don't transform the inputs in the dataset since we don't know the prompt size in advance (fix-sized padding introduces overhead)
-    ### Instead, we will transform the inputs in the inference loop.
-    dataset = DiscDataset(args.dataset_path, train=False)
+    timer = Timer(10 * 60)  # 10 minutes
+
+    dataset = DiscDataset(ic.dataset_path, train=False)
     inference_loader = DataLoader(
         dataset,
-        batch_size=args.batch_size,  # max for 20GB GPU
-        num_workers=args.num_workers,
+        batch_size=ic.batch_size,  # max for 20GB GPU
+        num_workers=ic.num_workers,
     )
 
-    if "generation_config" in vars(args):
-        generation_config = GenerationConfig.from_dict(args.generation_config)
-    else:
-        generation_config = GenerationConfig()
+    generation_config = GenerationConfig.from_dict(ic.generation_config)
 
     print("Generation Config:")
     generation_config_diff = generation_config.to_diff_dict()
@@ -134,26 +131,13 @@ def main():
     print()
     # Perform inference
 
-    out_path = Path(args.output_file)
-
-    timestamp = time.strftime("%m%d%H%M%S")
-    dataset_type = args.dataset_path.split("/")[-1]
-    if out_path.is_file():
-        out_path = Path(args.output_file)
-    else:
-        out_path = out_path / f"{timestamp}-{dataset_type}" / "submission.json"
-    out_config_file = out_path.parent / "config.yaml"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if yaml_file:
-        yaml_args = YamlArgsLoader(out_config_file)
-        if len(generation_config_diff.keys()) > 0:
-            setattr(args, "generation_config", generation_config_diff)
-        yaml_args.save_args(args, exclude=["config_file", "output_file"])
+    out_path = output_dir / "submission.json"
 
     data = {}
-    timer = Timer(10)  # 10 minutes
-    DEBUG = PerformanceMonitor(args.debug)
+    timer = Timer(10 * 60)  # 10 minutes
+    DEBUG = PerformanceMonitor(True)
+    model.eval()
+    model = model.merge_and_unload(inplace=True)
     for ids, batch in tqdm(inference_loader):
         with DEBUG:
             inputs = transform(batch["image"], prompt=batch["prompt"]).to(
@@ -162,13 +146,13 @@ def main():
             DEBUG.stamp()
             DEBUG.set_params(**{"ids": ids})
 
-            output = model.generate(
-                **inputs,
-                max_new_tokens=args.max_new_tokens,
-                do_sample=False,
-                generation_config=generation_config,
-                vision_feature_select_strategy=args.vision_feature_select_strategy,
-            )
+            with torch.no_grad():
+                output = model.generate(
+                    **inputs,
+                    max_new_tokens=ic.max_new_tokens,
+                    generation_config=generation_config,
+                    vision_feature_select_strategy=mp.vision_feature_select_strategy,
+                )
 
             DEBUG.stamp()
             text = processor.batch_decode(output, skip_special_tokens=True)
@@ -176,7 +160,7 @@ def main():
 
             res_len = []
             for idx, item in enumerate(ids):
-                if args.use_regex:
+                if ic.use_regex:
                     match = re.search(r"ASSISTANT:\s*(.*)", text[idx])
                     assistant_reply = match.group(1) if match else ""
                 else:
@@ -198,4 +182,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    app()

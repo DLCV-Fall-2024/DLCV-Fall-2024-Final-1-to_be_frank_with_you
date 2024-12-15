@@ -14,3 +14,4 @@ llama-3-8b/
 runs/
 wandb/
 configs/test.yaml
+results/
