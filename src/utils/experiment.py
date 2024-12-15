@@ -1,10 +1,9 @@
-from typing import Optional, Tuple, List, Type, TypeVar, cast, Any, Dict, Callable
-
-from pathlib import Path
 import time
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, TypeVar, cast
+
 import yaml
 from omegaconf import OmegaConf
-
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 

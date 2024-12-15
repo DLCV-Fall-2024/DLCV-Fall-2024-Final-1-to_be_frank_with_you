@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, PeftMixedModel, PeftModel, get_peft_model
 from PIL.Image import Image
 from transformers import (
     BaseImageProcessor,
@@ -12,7 +12,14 @@ from transformers import (
     LlavaProcessor,
 )
 from transformers.modeling_outputs import BaseModelOutputWithPooling
-from deepspeed.runtime.zero.stage3 import estimate_zero3_model_states_mem_needs_all_live
+
+try:
+    from deepspeed.runtime.zero.stage3 import (
+        estimate_zero3_model_states_mem_needs_all_live,
+    )
+except ImportError:
+    print("DeepSpeed not installed")
+    pass
 
 from src.arguments.dataclass import ModelParams
 from src.utils import default
@@ -266,16 +273,20 @@ class LlavaPEFT(torch.nn.Module):
         llava.config.image_seq_length = image_seq_length
 
         # Remove projector layers from lora for direct finetuning
-        no_lora_but_FF_prefix = [
-            "multi_modal_projector",
-            "fuser",
-            "vision_tower.AdaLNZero",
-            "auxiliary_projectors",
-        ]
+        self.no_lora_but_FF_prefix = getattr(
+            model_params,
+            "no_lora_but_FF_prefix",
+            [
+                "multi_modal_projector",
+                "fuser",
+                "vision_tower.AdaLNZero",
+                "auxiliary_projectors",
+            ],
+        )
         model_params.lora_config["target_modules"] = [
             layer
             for layer in model_params.lora_config["target_modules"]
-            if not any([prefix in layer for prefix in no_lora_but_FF_prefix])
+            if not any([prefix in layer for prefix in self.no_lora_but_FF_prefix])
         ]
 
         # These should be apply before apply PEFT
@@ -289,15 +300,18 @@ class LlavaPEFT(torch.nn.Module):
 
         # Apply LoRA
         lora_config = LoraConfig(**lora_config)
-        self.llava = get_peft_model(llava, lora_config)
+        self.llava: PeftMixedModel = get_peft_model(llava, lora_config)
         self.activate_only_lora()
 
         # Estimate memory for zero3
-        estimate_zero3_model_states_mem_needs_all_live(self.llava)
+        try:
+            estimate_zero3_model_states_mem_needs_all_live(self.llava)
+        except:
+            pass
 
         # Activate finetuning the encoder
         for name, param in llava.named_parameters():
-            if any([prefix in name for prefix in no_lora_but_FF_prefix]):
+            if any([prefix in name for prefix in self.no_lora_but_FF_prefix]):
                 param.requires_grad = True
 
         processor: LlavaProcessor = LlavaProcessor.from_pretrained(
@@ -358,3 +372,90 @@ class LlavaPEFT(torch.nn.Module):
             inputs["pixel_values"] = (inputs["pixel_values"], language_embeds)
 
         return self.llava(**inputs)
+
+    def merge_adapter(self):
+        self.llava.merge_adapter()
+
+    def unmerge_adapter(self):
+        self.llava.unmerge_adapter()
+
+    def enssetial_state_dict(self):
+        esstial_keywords = self.no_lora_but_FF_prefix
+        output_state_dict = {}
+        for key, value in self.llava.state_dict().items():
+            if any([keyword in key for keyword in esstial_keywords]):
+                output_state_dict[key] = value
+        return output_state_dict
+
+    def load_state_dict(self, state_dict, strict=False, assign=False):
+        new_state_dict = {}
+        for key, value in state_dict.items():
+            if key.startswith("llava"):
+                new_state_dict[key[6:]] = value
+            else:
+                new_state_dict[key] = value
+        self.llava.load_state_dict(new_state_dict, strict=strict, assign=assign)
+
+
+if __name__ == "__main__":
+    from src.arguments.dataclass import Config
+    from src.utils.experiment import load_config
+
+    name = "DINO_r256_3encoder_big_lr"
+    config, timestamp, output_dir, checkpoint_dir, log_dir = load_config(
+        name, Config, auto_create=True
+    )
+
+    from pathlib import Path
+
+    import torch
+    from transformers.utils import logging
+
+    logging.set_verbosity_error()
+
+    from src.models.llava import LlavaPEFT
+    from src.models.utils import ensure_all_on_device, ensure_all_same_dtype
+    from src.utils import default
+
+    addition_config = {}
+    mp = config.model
+    dp = config.dataset
+    pp = config.pipeline
+    op = config.optimization
+
+    device = torch.device("cpu")
+
+    __USE_DEEPSPEED__ = False
+    local_rank = -1
+    use_cache = not (mp.gradient_checkpointing and not __USE_DEEPSPEED__)
+
+    model = LlavaPEFT(
+        model_params=mp,
+        gradient_checkpointing=not use_cache,
+        lora_config=mp.lora_config,
+        device=device,
+        torch_dtype=torch.bfloat16,
+    )
+
+    base_dir = Path("outputs/DINO_r256_3encoder_big_lr_1215_001147")
+    model.load_state_dict(
+        torch.load(
+            base_dir / "checkpoint" / "latest.pt",
+            map_location=device,
+            weights_only=True,
+        )
+    )
+    torch.save(
+        model.enssetial_state_dict(),
+        base_dir / "checkpoint" / "shrink.pt",
+    )
+
+    ## Estimate memory saved
+
+    # original pt file memory
+    print("Original pt file memory")
+    original_memory = (base_dir / "checkpoint" / "latest.pt").stat().st_size
+    shirnk_memory = (base_dir / "checkpoint" / "shrink.pt").stat().st_size
+    print(f"Original memory: {original_memory/ 2 ** 20} MB")
+    print(f"Shrink memory: {shirnk_memory/2 ** 20} MB")
+    print(f"Saved memory: {(original_memory - shirnk_memory)/2 ** 20} MB")

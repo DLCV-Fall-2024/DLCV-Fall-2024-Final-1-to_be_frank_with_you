@@ -43,12 +43,12 @@ Alternatively, in case you don't have `sudo` permission, you can build from sour
 # Download and build
 wget https://github.com/pmodels/mpich/releases/download/v4.3.0b1/mpich-4.3.0b1.tar.gz
 tar -xvf mpich-4.3.0b1.tar.gz && cd mpich-4.3.0b1
-./configure --disable-fortran --prefix=/home/<USERNAME>/.local/mpich 2>&1 | tee c.txt
+./configure --disable-fortran --prefix=$HOME/.local/mpich 2>&1 | tee c.txt
 make 2>&1 | tee m.txt
 make install 2>&1 | tee mi.txt
 # Add installations to system paths
-export PATH=/home/<USERNAME>/.local/mpich/bin:$PATH
-export LD_LIBRARY_PATH=/home/<USERNAME>/.local/mpich/lib:$LD_LIBRARY_PATH
+export PATH=$HOME/.local/mpich/bin:$PATH
+export LD_LIBRARY_PATH=$HOME/.local/mpich/lib:$LD_LIBRARY_PATH
 ```
 
 # Run Training Code

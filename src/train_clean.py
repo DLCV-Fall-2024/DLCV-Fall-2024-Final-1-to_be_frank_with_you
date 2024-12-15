@@ -14,7 +14,9 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     from src.arguments.dataclass import Config
     from src.utils.experiment import load_config
 
-    config, timestamp, output_dir, checkpoint_dir, log_dir = load_config(name, Config)
+    config, timestamp, output_dir, checkpoint_dir, log_dir = load_config(
+        name, Config, auto_create=True
+    )
     if config is None:
         print("Configuration created")
         return
@@ -22,6 +24,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     import torch
     from liger_kernel.transformers import apply_liger_kernel_to_llama
     from omegaconf import OmegaConf
+    from peft import get_peft_model_state_dict
     from pytorch_lightning import seed_everything
     from torch.utils.data import DataLoader
     from tqdm import tqdm
@@ -31,10 +34,16 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
 
     from src.models.llava import LlavaPEFT
     from src.models.utils import ensure_all_on_device, ensure_all_same_dtype
-    from src.utils.experiment import dump_additional_config
     from src.utils import default
     from src.utils.dataset import DiscDataset
-    from src.utils.log import PerformanceMonitor, Timer, init_logger, init_wandb, print_once
+    from src.utils.experiment import dump_additional_config
+    from src.utils.log import (
+        PerformanceMonitor,
+        Timer,
+        init_logger,
+        init_wandb,
+        print_once,
+    )
 
     addition_config = {}
     mp = config.model
@@ -213,17 +222,19 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
                 if timer.timesup():
                     ## save model for a certain interval
                     ckpt_path = checkpoint_dir / f"latest.pt"
-                    torch.save(model.state_dict(), ckpt_path)
+                    torch.save(model.enssetial_state_dict(), ckpt_path)
                     timer.reset()
 
         model.eval()
         val_bar = tqdm(val_loader)
         val_bar.set_description(f"[Val {epoch}/{epochs}]")
+        model.merge_adapter()
+
         with torch.no_grad():
             for ids, batch in val_bar:
                 with DEBUG:
                     inputs = transform(batch["image"], prompt=batch["prompt"]).to(
-                        device
+                        device, torch.bfloat16
                     )
                     labels = inputs["input_ids"].clone()
                     DEBUG.stamp()
@@ -241,8 +252,9 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
                     DEBUG.stamp()
                     DEBUG.log_performance(log_per=20)
 
-        ckpt_path = checkpoint_dir / f"model-{epoch}.pt"
-        torch.save(model.state_dict(), ckpt_path)
+        ckpt_path = checkpoint_dir / f"{epoch}.pt"
+        model.unmerge_adapter()
+        torch.save(model.enssetial_state_dict(), ckpt_path)
 
 
 if __name__ == "__main__":
