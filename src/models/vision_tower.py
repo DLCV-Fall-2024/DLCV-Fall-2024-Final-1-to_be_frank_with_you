@@ -14,14 +14,6 @@ from transformers import (
 )
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 
-try:
-    from deepspeed.runtime.zero.stage3 import (
-        estimate_zero3_model_states_mem_needs_all_live,
-    )
-except ImportError:
-    print("DeepSpeed not installed")
-    pass
-
 from pathlib import Path
 
 from src.arguments.dataclass import ModelParams
