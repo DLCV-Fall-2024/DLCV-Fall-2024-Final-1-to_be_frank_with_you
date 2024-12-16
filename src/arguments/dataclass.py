@@ -33,7 +33,7 @@ class ModelParams:
     lora_config: dict = field(
         default_factory=lambda: {
             "r": 256,
-            "lora_alpha": 32,
+            "lora_alpha": 16,
             "use_rslora": True,  # sets the adapter scaling factor to `lora_alpha/math.sqrt(r)`
             "target_modules": [
                 "q_proj",
@@ -66,12 +66,14 @@ class DatasetParams:
 
 @dataclass
 class OptimizationParams:
-    epochs: int = 1
-    lr: float = 5e-4
+    epochs: int = 2
+    lr: float = 3e-4
     batch_size: int = 4
     optimizer_type: str = "default"
     accumulation_steps: int = 4
     gradient_clip_val: float = 1.0
+
+    train_language_start_epoch: int = 1
 
 
 @dataclass

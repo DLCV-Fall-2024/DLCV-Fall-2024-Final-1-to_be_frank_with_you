@@ -8,25 +8,32 @@ model:
   model_id: llava-hf/llava-1.5-7b-hf
   encoder_id: facebook/dinov2-large
   share_vit: false
-  use_depth: false
+  use_depth: true
   depth_model_id: depth-anything/Depth-Anything-V2-Small-hf
-  use_segmentation: false
+  use_segmentation: true
   segmentation_model_id: shi-labs/oneformer_ade20k_dinat_large
   fuser_id: gemini
   conditional_fuser: true
+  condition_dropout: 0.3
+  no_lora_but_FF_prefix:
+  - multi_modal_projector
+  - fuser
+  - vision_tower.AdaLNZero
+  - auxiliary_projectors
   patch_size: 14
   vision_feature_select_strategy: full
   gradient_checkpointing: true
   lora_config:
-    r: 16
-    lora_alpha: 32
+    r: 256
+    lora_alpha: 16
+    use_rslora: true
     target_modules:
     - q_proj
     - v_proj
     - multi_modal_projector.linear_1
     - multi_modal_projector.linear_2
     exclude_modules: vision_tower.*
-    lora_dropout: 0.1
+    lora_dropout: 0.3
     use_dora: true
     bias: none
     task_type: CAUSAL_LM
@@ -39,8 +46,10 @@ dataset:
   num_workers: 10
   prefetch_factor: 2
 optimization:
-  epochs: 1
-  lr: 3.0e-05
+  epochs: 2
+  lr: 0.0003
   batch_size: 4
   optimizer_type: default
   accumulation_steps: 4
+  gradient_clip_val: 1.0
+  train_language_start_epoch: 1

@@ -157,12 +157,14 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
             print(f"Warning: {name}.required_grad= {param.requires_grad}.")
 
     model.to(device)
-
+    model.finetune_language(False)  # turn off language finetuning
     for epoch in range(epochs):
         model.train()
 
         train_bar = tqdm(train_loader)
         train_bar.set_description(f"[Train {epoch}/{epochs}]")
+        if epoch == op.train_language_start_epoch:
+            model.finetune_language(True)
         for ids, batch in train_bar:
             with DEBUG:
                 inputs = transform(batch["image"], prompt=batch["prompt"]).to(
@@ -183,6 +185,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
                         labels=labels,
                         vision_feature_select_strategy=mp.vision_feature_select_strategy,
                         use_cache=use_cache,
+                        other_params={"ids": ids, **batch},
                     )
                 DEBUG.stamp()
 

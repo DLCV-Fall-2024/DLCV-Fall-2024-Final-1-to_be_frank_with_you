@@ -44,6 +44,7 @@ class DiscDataset(Dataset):
         train: bool = True,
         use_trainer: bool = False,
         trainer_input_kwargs: Optional[dict] = None,
+        cache_dir: Optional[str] = ".cache",
     ):
         path = Path(path)
         img_dir = path / "images"
@@ -74,6 +75,8 @@ class DiscDataset(Dataset):
         self.use_trainer = use_trainer
         self.trainer_input_kwargs = trainer_input_kwargs
 
+        self.cache_dir = Path(cache_dir) if cache_dir is not None else None
+
     def __len__(self):
         return len(self.config)
 
@@ -98,11 +101,25 @@ class DiscDataset(Dataset):
             for key in inputs.keys():
                 inputs[key] = inputs[key].squeeze(0)
 
+        inputs["use_cache_feat"] = False
+        if self.cache_dir is not None:
+            rgb_path = self.cache_dir / f"{item.id}_rgb.pt"
+            depth_path = self.cache_dir / f"{item.id}_depth.pt"
+            seg_path = self.cache_dir / f"{item.id}_seg.pt"
+
+            if rgb_path.exists():
+                with open(rgb_path, "rb") as f:
+                    inputs["rgb"] = torch.load(f, map_location="cpu")
+            if depth_path.exists():
+                with open(depth_path, "rb") as f:
+                    inputs["depth"] = torch.load(f, map_location="cpu")
+            if seg_path.exists():
+                with open(seg_path, "rb") as f:
+                    inputs["seg"] = torch.load(f, map_location="cpu")
+            inputs["use_cache_feat"] = True
+
         if self.is_train:
-            inputs = {
-                "image": inputs["image"],
-                "prompt": f"{inputs['prompt']} {item.gt}",
-            }
+            inputs["prompt"] = f"{inputs['prompt']} {item.gt}"
 
         return (item.id, inputs)
 
