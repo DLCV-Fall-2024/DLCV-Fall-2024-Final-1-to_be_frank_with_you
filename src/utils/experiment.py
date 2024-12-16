@@ -24,49 +24,60 @@ C = TypeVar("C")
 
 
 def load_config(
-    name: str,
     Config: Type[C],
+    name: Optional[str] = None,
+    cli_args: Optional[Dict] = None,
     sync_fn: Callable[[], None] = None,
     auto_create: bool = False,
     external_defaults: Tuple[List[str], str] = [],
-) -> Tuple[Optional[C], Path, Path, Path, Path]:
+) -> Tuple[Optional[C], str, Path, Path, Path]:
     # Initialize default configuration
     default_config = OmegaConf.structured(Config)
+    use_default_config = name is None
 
-    configs_dir = ROOT_DIR / "configs"
-    config_path = configs_dir / f"{name}.yaml"
+    if not use_default_config:
+        configs_dir = ROOT_DIR / "configs"
+        config_path = configs_dir / f"{name}.yaml"
 
-    configs_dir.mkdir(parents=True, exist_ok=True)
+        configs_dir.mkdir(parents=True, exist_ok=True)
 
-    if not config_path.exists():
-        if sync_fn is not None:
-            sync_fn()
-        if auto_create:
-            # Add external defaults
-            for keys, external_config_name in external_defaults:
-                external_config = OmegaConf.load(
-                    configs_dir / f"{external_config_name}.yaml"
-                )
-                target = default_config
-                for key in keys[:-1]:
-                    if key not in target:
-                        target[key] = {}
-                    target = target[key]
-                target[keys[-1]] = external_config
+        if not config_path.exists():
+            if sync_fn is not None:
+                sync_fn()
+            if auto_create:
+                # Add external defaults
+                for keys, external_config_name in external_defaults:
+                    external_config = OmegaConf.load(
+                        configs_dir / f"{external_config_name}.yaml"
+                    )
+                    target = default_config
+                    for key in keys[:-1]:
+                        if key not in target:
+                            target[key] = {}
+                        target = target[key]
+                    target[keys[-1]] = external_config
 
-            with config_path.open("w") as f:
-                OmegaConf.save(default_config, f)
+                with config_path.open("w") as f:
+                    OmegaConf.save(default_config, f)
 
-        return None, None, None, None, None
+            return None, None, None, None, None
+
+        # Load user-modified configuration
+        config = OmegaConf.load(config_path)
+        config = OmegaConf.merge(default_config, config)
+        config = OmegaConf.to_object(config)
+    
+    else:
+        config = OmegaConf.to_object(default_config)
+        name = "DEFAULT"
+
+    if cli_args is not None:
+        config = OmegaConf.merge(config, cli_args)
+    config = cast(Config, config)
 
     # Create experiment assets (folders and default configuration)
     timestamp = time.strftime("%m%d_%H%M%S")
     output_dir, checkpoint_dir, log_dir = create_assets(ROOT_DIR, f"{name}_{timestamp}")
-
-    # Load user-modified configuration
-    config = OmegaConf.load(config_path)
-    config = OmegaConf.merge(default_config, config)
-    config = cast(Config, config)
 
     return config, timestamp, output_dir, checkpoint_dir, log_dir
 

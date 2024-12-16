@@ -1,33 +1,45 @@
 import os
-from pathlib import Path
+import sys
+import argparse
 
-import typer
-
-app = typer.Typer(pretty_exceptions_show_locals=False)
+from src.arguments.dataclass import Config
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-import warnings
 
+def main():
 
-@app.command()
-def main(name: str = typer.Argument(..., help="Name of the experiment")):
-    from src.arguments.dataclass import Config
+    # Argument parsing
+    parser = argparse.ArgumentParser(description="Training Script")
+    parser.add_argument("--name", type=str, help="Name of the config presets")
+
+    Config().load(parser)
+    args = parser.parse_args()
+
+    # Load configuration from preset and CLI arguments
     from src.utils.experiment import load_config
 
-    config, timestamp, output_dir, checkpoint_dir, log_dir = load_config(
-        name, Config, auto_create=True
+    name = args.name
+    config, timestamp, *assets = load_config(
+        Config,
+        name=name,
+        cli_args=Config().extract(args),
+        auto_create=True,
     )
+    output_dir, checkpoint_dir, log_dir = assets
     if config is None:
         print("Configuration created")
-        return
+        sys.exit()
+
+    import warnings
+    from pathlib import Path
+    from omegaconf import OmegaConf
+    from tqdm import tqdm
 
     import torch
     from liger_kernel.transformers import apply_liger_kernel_to_llama
-    from omegaconf import OmegaConf
     from peft import get_peft_model_state_dict
     from pytorch_lightning import seed_everything
     from torch.utils.data import DataLoader
-    from tqdm import tqdm
     from transformers.utils import logging
 
     logging.set_verbosity_error()
@@ -132,9 +144,7 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
     ##########################################################
 
     project_name = default(config.project_name, "DLCV-FINAL-Traffic-LLaVA")
-    run_name = default(
-        config.run_name, f"{name}-{mp.model_id.split('/')[-1]}-{timestamp}"
-    )
+    run_name = default(config.run_name, f"{name}-{mp.model_id.split('/')[-1]}-{timestamp}")
 
     if pp.wandb:
         init_wandb(
@@ -259,6 +269,5 @@ def main(name: str = typer.Argument(..., help="Name of the experiment")):
         model.unmerge_adapter()
         torch.save(model.enssetial_state_dict(), ckpt_path)
 
-
 if __name__ == "__main__":
-    app()
+    main()

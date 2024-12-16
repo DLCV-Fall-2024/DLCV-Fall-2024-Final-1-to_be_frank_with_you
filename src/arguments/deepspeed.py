@@ -1,9 +1,12 @@
 from dataclasses import dataclass, field
 from typing import Optional, Dict
+from argparse import ArgumentParser
+
+from src.arguments import ParamGroup
 
 
 @dataclass
-class ModelParams:
+class ModelParams(ParamGroup):
     model_id: str = "llava-hf/llava-1.5-7b-hf"
     encoder_id: str = "facebook/dinov2-large"
 
@@ -37,26 +40,42 @@ class ModelParams:
         }
     )
 
+    def load(self, parser: ArgumentParser, sentinel: bool = False):
+        super().__init__(parser=parser, name="Loading Parameters", fill_none=sentinel)
+
+    def extract(self, args):
+        return super().extract(args)
+
 
 @dataclass
-class DatasetParams:
+class DatasetParams(ParamGroup):
     dataset_path: str = "data"
-    seed: int = 42
     num_workers: int = 10
     prefetch_factor: int = 2
 
+    def load(self, parser: ArgumentParser, sentinel: bool = False):
+        super().__init__(parser=parser, name="Dataset Parameters", fill_none=sentinel)
+
+    def extract(self, args):
+        return super().extract(args)
 
 @dataclass
-class DeepSpeedParams:
+class DeepSpeedParams(ParamGroup):
     epochs: int = 1
     learning_rate: float = 3e-5
     batch_size: int = 4
     accumulation_steps: int = 4
     config: Dict = field(default_factory=lambda: {})
 
+    def load(self, parser: ArgumentParser, sentinel: bool = False):
+        super().__init__(parser=parser, name="DeepSpeed Parameters", fill_none=sentinel)
+
+    def extract(self, args):
+        return super().extract(args)
+
 
 @dataclass
-class Config:
+class Config(ParamGroup):
     seed: int = 42
     debug: bool = False
     profile: bool = False
@@ -69,3 +88,16 @@ class Config:
     model: ModelParams = field(default_factory=ModelParams)
     dataset: DatasetParams = field(default_factory=DatasetParams)
     deepspeed: DeepSpeedParams = field(default_factory=DeepSpeedParams)
+
+    def load(self, parser: ArgumentParser, sentinel: bool = False):
+        super().__init__(parser=parser, fill_none=sentinel)
+        self.model.load(parser, sentinel)
+        self.dataset.load(parser, sentinel)
+        self.deepspeed.load(parser, sentinel)
+
+    def extract(self, args):
+        p = super().extract(args)
+        p["model"] = self.model.extract(args)
+        p["dataset"] = self.dataset.extract(args)
+        p["deepspeed"] = self.deepspeed.extract(args)
+        return p

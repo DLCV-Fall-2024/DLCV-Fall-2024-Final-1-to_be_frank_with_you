@@ -13,7 +13,7 @@ import os
 import sys
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
-from typing import List, Union
+from typing import List, Union, Optional
 
 
 class GroupParams:
@@ -24,10 +24,14 @@ class ParamGroup:
 
     __yaml_name__ = ""
 
-    def __init__(self, parser: ArgumentParser = None, name: str = "", fill_none=False):
+    def __init__(self, parser: ArgumentParser = None, name: Optional[str] = None, fill_none=False):
         if parser is None:
             return
-        group = parser.add_argument_group(name)
+        if name is None:
+            group = parser
+        else:
+            group = parser.add_argument_group(name)
+
         for key, value in vars(self).items():
             shorthand = False
             if key.startswith("__"):
@@ -53,11 +57,19 @@ class ParamGroup:
                 else:
                     group.add_argument("--" + key, default=value, type=t)
 
-    def extract(self, args):
-        group = GroupParams()
-        for arg in vars(args).items():
-            if arg[0] in vars(self) or ("_" + arg[0]) in vars(self):
-                setattr(group, arg[0], arg[1])
+    # def extract(self, args):
+    #     group = GroupParams()
+    #     for arg in vars(args).items():
+    #         if arg[0] in vars(self) or ("_" + arg[0]) in vars(self):
+    #             setattr(group, arg[0], arg[1])
+    #     return group
+
+    def extract(self, args: Namespace):
+        group = {}
+        self_vars = vars(self)
+        for key, value in vars(args).items():
+            if key in self_vars and value != self_vars[key]:
+                group[key] = value
         return group
 
 

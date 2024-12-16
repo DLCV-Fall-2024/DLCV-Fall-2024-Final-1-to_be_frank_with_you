@@ -1,10 +1,13 @@
 import os
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
+from argparse import ArgumentParser
+
+from src.arguments import ParamGroup
 
 
 @dataclass
-class ModelParams:
+class ModelParams(ParamGroup):
     device: str = "cuda"
 
     model_id: str = "llava-hf/llava-1.5-7b-hf"
@@ -49,35 +52,57 @@ class ModelParams:
         }
     )
 
+    def load(self, parser: ArgumentParser, sentinel: bool = False):
+        super().__init__(parser=parser, name="Loading Parameters", fill_none=sentinel)
+
+    def extract(self, args):
+        return super().extract(args)
+
 
 @dataclass
-class PipelineParams:
+class PipelineParams(ParamGroup):
     wandb: bool = True
     debug: bool = False
 
+    def load(self, parser: ArgumentParser, sentinel: bool = False):
+        super().__init__(parser=parser, name="Pipeline Parameters", fill_none=sentinel)
+
+    def extract(self, args):
+        return super().extract(args)
+
 
 @dataclass
-class DatasetParams:
+class DatasetParams(ParamGroup):
     dataset_path: str = "data"
-    seed: int = 42
     num_workers: int = 10
     prefetch_factor: int = 2
 
+    def load(self, parser: ArgumentParser, sentinel: bool = False):
+        super().__init__(parser=parser, name="Dataset Parameters", fill_none=sentinel)
+
+    def extract(self, args):
+        return super().extract(args)
+
 
 @dataclass
-class OptimizationParams:
+class OptimizationParams(ParamGroup):
     epochs: int = 2
     lr: float = 3e-4
     batch_size: int = 4
     optimizer_type: str = "default"
     accumulation_steps: int = 4
     gradient_clip_val: float = 1.0
-
     train_language_start_epoch: int = 1
+
+    def load(self, parser: ArgumentParser, sentinel: bool = False):
+        super().__init__(parser=parser, name="Optimization Parameters", fill_none=sentinel)
+
+    def extract(self, args):
+        return super().extract(args)
 
 
 @dataclass
-class Config:
+class Config(ParamGroup):
     project_name: Optional[str] = None
     run_name: Optional[str] = None
 
@@ -90,9 +115,24 @@ class Config:
     dataset: DatasetParams = field(default_factory=DatasetParams)
     optimization: OptimizationParams = field(default_factory=OptimizationParams)
 
+    def load(self, parser: ArgumentParser, sentinel: bool = False):
+        super().__init__(parser=parser, name="Configuration Parameters", fill_none=sentinel)
+        self.model.load(parser, sentinel)
+        self.pipeline.load(parser, sentinel)
+        self.dataset.load(parser, sentinel)
+        self.optimization.load(parser, sentinel)
+
+    def extract(self, args):
+        p = super().extract(args)
+        p["model"] = self.model.extract(args)
+        p["pipeline"] = self.pipeline.extract(args)
+        p["dataset"] = self.dataset.extract(args)
+        p["optimization"] = self.optimization.extract(args)
+        return p
+
 
 @dataclass
-class GenerateParams:
+class GenerateParams(ParamGroup):
     config_path: Optional[str] = None
     output_dir: Optional[str] = None
     dataset_path: str = "data/test"
@@ -110,3 +150,9 @@ class GenerateParams:
 
     model_config: Config = field(default_factory=Config)
     model_path: Optional[str] = None
+
+    def load(self, parser: ArgumentParser, sentinel: bool = False):
+        super().__init__(parser=parser, name="Generation Parameters", fill_none=sentinel)
+
+    def extract(self, args):
+        return super().extract(args)

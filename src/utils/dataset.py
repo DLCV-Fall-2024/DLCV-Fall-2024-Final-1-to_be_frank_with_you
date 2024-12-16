@@ -21,9 +21,9 @@ from src.utils.log import pretty_print
 class DiscDatasetItem:
     id: str
     prompt: int | str
-    img_path: str
     gt: Optional[str]
-
+    img_path: str
+    features: Optional[dict]
 
 @dataclass_json
 @dataclass
@@ -45,6 +45,10 @@ class DiscDataset(Dataset):
         use_trainer: bool = False,
         trainer_input_kwargs: Optional[dict] = None,
         cache_dir: Optional[str] = ".cache",
+        # use_cache_feature: bool = False,
+        # encoder_id: Optional[str] = None,
+        # depth_model_id: Optional[str] = None,
+        # segmentation_model_id: Optional[str] = None,
     ):
         path = Path(path)
         img_dir = path / "images"
@@ -54,8 +58,50 @@ class DiscDataset(Dataset):
             img_dir.exists() and img_dir.is_dir()
         ), f"images directory not found in {path}"
 
+        # if use_cache_feature:
+        #     assert (
+        #         encoder_id is not None
+        #     ), "encoder_id is required when use_cache_feature is True"
+        #     assert (
+        #         depth_model_id is not None
+        #     ), "depth_model_id is required when use_cache_feature is True"
+        #     assert (
+        #         segmentation_model_id is not None
+        #     ), "segmentation_model_id is required when use_cache_feature is True"
+
+        #     cache_dir = path / "features"
+        #     default_feature_dir = cache_dir / "default" / encoder_id
+        #     depth_feature_dir = cache_dir / "depth" / depth_model_id
+        #     segmentation_feature_dir = (
+        #         cache_dir / "segmentation" / segmentation_model_id
+        #     )
+
+        #     assert (
+        #         default_feature_dir.exists()
+        #     ), f"default feature directory {default_feature_dir} not found"
+        #     assert (
+        #         depth_feature_dir.exists()
+        #     ), f"depth feature directory {depth_feature_dir} not found"
+        #     assert (
+        #         segmentation_feature_dir.exists()
+        #     ), f"segmentation feature directory {segmentation_feature_dir} not found"
+
+        #     # Check if config has features
+        #     with open(config_path, "r") as f:
+        #         config = cast(DiscDatasetConfig, DiscDatasetConfig.from_json(f.read()))
+        #     for item in config.data:
+        #         if item.features is None:
+        #             assert False, f"cache features not found for item {item.id}"
+        #         if item.features.get("default", {})[encoder_id] is None:
+        #             assert False, f"default feature not found for item {item.id}"
+        #         if item.features.get("depth", {})[depth_model_id] is None:
+        #             assert False, f"depth feature not found for item {item.id}"
+        #         if item.features.get("segmentation", {})[segmentation_model_id] is None:
+        #             assert False, f"segmentation feature not found for item {item.id}"
+
         with open(config_path, "r") as f:
             config = cast(DiscDatasetConfig, DiscDatasetConfig.from_json(f.read()))
+
         self.config = config.data
         self.prompts = config.prompts
 
@@ -85,19 +131,43 @@ class DiscDataset(Dataset):
             return self.__trainer_getitem__(idx)
 
         item = self.config[idx]
-        img = PIL.Image.open(item.img_path).convert("RGB")
+
         prompt = item.prompt
         if isinstance(prompt, int):
             prompt = self.prompts[prompt]
+        prompt = apply_chat_template(prompt)
+
+        # if self.use_cache_feature:
+        #     features = item.features
+        #     default_feature_path = features["default"][self.encoder_id]
+        #     depth_feature_path = features["depth"][self.depth_model_id]
+        #     segmentation_feature_path = features["segmentation"][self.segmentation_model_id]
+
+        #     default_feature = torch.load(default_feature_path)
+        #     depth_feature = torch.load(depth_feature_path)
+        #     segmentation_feature = torch.load(segmentation_feature_path)
+
+        #     inputs = {
+        #         "image_feature": default_feature,
+        #         "auxiliary_features": [depth_feature, segmentation_feature],
+        #         "prompt": prompt,
+        #     }
+
+        #     if self.is_train:
+        #         inputs["prompt"] = f"{inputs['prompt']} {item.gt}"
+
+        #     return (item.id, inputs)
+
+        img = PIL.Image.open(item.img_path).convert("RGB")
 
         if isinstance(self.transform, transforms.Compose):
             img = self.transform(img)
             inputs = {
                 "image": img,
-                "prompt": apply_chat_template(prompt),
+                "prompt": prompt,
             }
         else:
-            inputs = self.transform(img, prompt=apply_chat_template(prompt))
+            inputs = self.transform(img, prompt=prompt)
             for key in inputs.keys():
                 inputs[key] = inputs[key].squeeze(0)
 

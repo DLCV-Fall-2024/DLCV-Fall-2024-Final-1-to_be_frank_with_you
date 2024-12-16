@@ -14,13 +14,13 @@ from transformers import (
 )
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 
-try:
-    from deepspeed.runtime.zero.stage3 import (
-        estimate_zero3_model_states_mem_needs_all_live,
-    )
-except ImportError:
-    print("DeepSpeed not installed")
-    pass
+# try:
+#     from deepspeed.runtime.zero.stage3 import (
+#         estimate_zero3_model_states_mem_needs_all_live,
+#     )
+# except ImportError:
+#     print("DeepSpeed not installed")
+#     pass
 
 from pathlib import Path
 
@@ -114,10 +114,10 @@ class LlavaPEFT(torch.nn.Module):
         self.activate_only_lora()
 
         # Estimate memory for zero3
-        try:
-            estimate_zero3_model_states_mem_needs_all_live(self.llava)
-        except:
-            pass
+        # try:
+        #     estimate_zero3_model_states_mem_needs_all_live(self.llava)
+        # except:
+        #     pass
 
         # Activate finetuning the encoder
         for name, param in llava.named_parameters():
