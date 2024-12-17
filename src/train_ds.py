@@ -53,7 +53,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data import DistributedSampler
 
 from src.models.llava import LlavaPEFT
-from src.utils.experiment import dump_additional_config
+from src.utils.experiment import dump_config
 from src.utils import default
 from src.utils.dataset import DiscDataset
 from src.utils.log import (
@@ -89,7 +89,7 @@ print(
     f"Trainable: {trainable_params/1e6:.4f}M | All: {all_param/1e6:.4f}M | Ratio: {trainable_params/all_param * 100:.3f}%"
 )
 
-dump_additional_config(addition_config, output_dir)
+dump_config(addition_config, output_dir)
 del addition_config
 
 ### We don't transform the inputs in the dataset since we don't know the prompt size in advance (fix-sized padding introduces overhead)

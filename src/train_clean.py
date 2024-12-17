@@ -45,7 +45,7 @@ from src.models.llava import LlavaPEFT, collate_fn
 from src.utils import default
 from src.utils.dataset import DiscDataset
 from src.utils import container_to
-from src.utils.experiment import dump_additional_config
+from src.utils.experiment import dump_config
 from src.utils.log import (
     PerformanceMonitor,
     Timer,
@@ -95,7 +95,8 @@ print(
 
 # model.to(device)
 
-dump_additional_config(addition_config, output_dir)
+dump_config(config, output_dir / "config.yaml")
+dump_config(addition_config, output_dir / "model_config.yaml")
 del addition_config
 
 ###################### Dataset ######################
@@ -182,6 +183,9 @@ for epoch in range(epochs):
             # `batch` is a nested dict with keys: `pixel_values`, `aux_inputs`, `input_ids`, `attention_mask`
             # `aux_inputs` is a list of nested dict
             inputs = container_to(batch, device=device, dtype=torch.bfloat16)
+            # `input_ids` and `attention_mask` should be long tensors
+            inputs["input_ids"] = inputs["input_ids"].to(torch.long)
+            inputs["attention_mask"] = inputs["attention_mask"].to(torch.long)
             labels = inputs["input_ids"].clone()
 
             DEBUG.stamp()

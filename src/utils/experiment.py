@@ -104,6 +104,8 @@ yaml.add_representer(str, str_presenter, Dumper=CustomDumper)
 yaml.add_representer(dict, dict_presenter, Dumper=CustomDumper)
 
 
-def dump_additional_config(config: Dict[str, Any], output_dir: str):
-    with (Path(output_dir) / "config.yaml").open("w") as f:
+def dump_config(config: Any, output_path: Path):
+    if not isinstance(config, dict):
+        config = OmegaConf.to_container(OmegaConf.structured(config), resolve=True)
+    with output_path.open("w") as f:
         yaml.dump(config, f, Dumper=CustomDumper, default_flow_style=False)
