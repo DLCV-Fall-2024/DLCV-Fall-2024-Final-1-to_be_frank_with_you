@@ -3,6 +3,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import torch
 import torch.nn as nn
+from torchvision import transforms
 from transformers import (
     AutoImageProcessor,
     AutoModel,
@@ -12,7 +13,7 @@ from transformers import (
     OneFormerImageProcessor,
     OneFormerProcessor,
 )
-
+from transformers.feature_extraction_utils import BatchFeature
 from .base import ImageEncoderOutput, VisionEncoder
 
 
@@ -23,8 +24,9 @@ class SegmentationEncoder(VisionEncoder):
         model_id: Optional[str] = None,
         model: Optional[AutoModel] = None,
         processor: Optional[AutoImageProcessor] = None,
+        segment_type: Optional[str] = "semantic",
         vision_feature_layer: Optional[int] = None,
-        image_target_size: Optional[Tuple[int, int]] = (518, 518),
+        image_target_size: Optional[Tuple[int, int]] = None,
         torch_dtype: Optional[str] = "float16",
         device: Optional[str] = "cuda",
         **kwargs,
@@ -34,14 +36,15 @@ class SegmentationEncoder(VisionEncoder):
             model = OneFormerForUniversalSegmentation.from_pretrained(
                 model_id, torch_dtype=torch_dtype
             )
+            image_processor: OneFormerImageProcessor = (
+                OneFormerImageProcessor.from_pretrained(
+                    model_id, size=image_target_size, torch_dtype=torch_dtype
+                )
+            )
             processor: OneFormerProcessor = OneFormerProcessor.from_pretrained(
                 model_id, torch_dtype=torch_dtype
             )
-            image_processor: OneFormerImageProcessor = (
-                OneFormerImageProcessor.from_pretrained(
-                    model_id, torch_dtype=torch_dtype
-                )
-            )
+            processor.image_processor = image_processor
 
             model = model.to(device)
             model_id = None
@@ -50,6 +53,7 @@ class SegmentationEncoder(VisionEncoder):
         self.image_processor = image_processor
         self.image_target_size = image_target_size
         self.label_ids_to_fuse = set()
+        self.segment_type = segment_type
 
         self.torch_dtype = torch_dtype
         self.device = device
@@ -63,6 +67,18 @@ class SegmentationEncoder(VisionEncoder):
             ],
             dtype=torch.uint8,
         ).to(self.device)
+
+    # def resized_processor(self, images, **kwargs):
+    #     inputs = self.image_processor(images, task_inputs=[self.segment_type], **kwargs)
+    #     pixel_values = inputs["pixel_values"]
+    #     pixel_values = self.image_resize(pixel_values)
+    #     return BatchFeature(dict(pixel_values=pixel_values))
+
+    def task_processor(self, images, **kwargs):
+        return self.processor(images, task_inputs=[self.segment_type], **kwargs)
+        # inputs = self.image_processor(images, task_inputs=[self.segment_type], **kwargs)
+        # pixel_values = inputs["pixel_values"]
+        # return BatchFeature(dict(pixel_values=pixel_values))
 
     @property
     def hidden_states_dim(self) -> int:

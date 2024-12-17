@@ -25,7 +25,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPooling
 from pathlib import Path
 
 from src.arguments.dataclass import ModelParams
-from src.utils import default
+from src.utils import default, container_cat, batch_feature_to_dict
 
 from .encoder import (
     DepthEncoder,
@@ -200,7 +200,7 @@ class LlavaPEFT(torch.nn.Module):
 
         if self.conditional_fuser:
             language_embeds = self.llava.base_model.get_input_embeddings()(
-                inputs["input_ids"]
+                inputs["input_ids"].to(torch.long)
             )
 
             language_embeds = language_embeds.mean(dim=1)
@@ -263,6 +263,56 @@ class LlavaPEFT(torch.nn.Module):
         for name, param in self.llava.named_parameters():
             if "lora" in name:
                 param.requires_grad = finetune
+
+
+PADDING_TOKEN = 32001
+ATTENTION_MASK = 0
+
+
+def pad_sequences(sequences, padding_token):
+    dtype = sequences[0].dtype
+    max_length = max(sequence.shape[1] for sequence in sequences)
+    paddings = [
+        torch.tensor([[padding_token] * (max_length - sequence.shape[1])], dtype=dtype)
+        for sequence in sequences
+    ]
+
+    padded_sequences = [
+        torch.cat((paddings[i], sequence), dim=1)
+        for i, sequence in enumerate(sequences)
+    ]
+    return padded_sequences
+
+
+def collate_fn(batch):
+    # From List[BatchFeature] to List[Dict]
+    datamaps = [batch_feature_to_dict(item[1]) for item in batch]
+    data_keys = datamaps[0].keys()
+    # is_tensor = [isinstance(datamaps[0][key], torch.Tensor) for key in data_keys]
+
+    # Extract input_ids and other data from the batch
+    input_ids = [item[1]["input_ids"] for item in batch]
+    attention_mask = [item[1]["attention_mask"] for item in batch]
+
+    # Pad input_ids to the same length
+    padded_input_ids = pad_sequences(input_ids, PADDING_TOKEN)
+    padded_attention_mask = pad_sequences(attention_mask, ATTENTION_MASK)
+
+    # Update the batch with padded input_ids
+    for i, datamap in enumerate(datamaps):
+        datamap["input_ids"] = padded_input_ids[i]
+        datamap["attention_mask"] = padded_attention_mask[i]
+
+    merged_ids = [item[0] for item in batch]
+    merged_data = {}
+
+    for i, key in enumerate(data_keys):
+        data_list = [datamap[key] for datamap in datamaps]
+        data_list = container_cat(data_list, dim=0)
+        merged_data[key] = data_list
+
+    # Return the updated batch
+    return merged_ids, merged_data
 
 
 if __name__ == "__main__":

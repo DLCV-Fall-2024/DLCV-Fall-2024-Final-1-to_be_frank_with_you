@@ -42,10 +42,11 @@ from transformers.utils import logging
 
 logging.set_verbosity_error()
 
-from src.models.llava import LlavaPEFT
+from src.models.llava import LlavaPEFT, collate_fn
 from src.models.utils import ensure_all_on_device, ensure_all_same_dtype
 from src.utils import default
 from src.utils.dataset import DiscDataset
+from src.utils import container_to
 from src.utils.experiment import dump_additional_config
 from src.utils.log import (
     PerformanceMonitor,
@@ -99,6 +100,8 @@ print(
 dump_additional_config(addition_config, output_dir)
 del addition_config
 
+###################### Dataset ######################
+
 ### We don't transform the inputs in the dataset since we don't know the prompt size in advance (fix-sized padding introduces overhead)
 ### Instead, we will transform the inputs in the inference loop.
 dataset_dir = Path(dp.dataset_path)
@@ -108,21 +111,24 @@ assert (
     train_set.exists() and val_set.exists()
 ), f"Dataset not found. {dataset_dir} should contain 'train' and 'val' folders."
 
-train_dataset = DiscDataset(train_set, train=True)
+train_dataset = DiscDataset(train_set, transform=transform, train=True)
 train_loader = DataLoader(
     train_dataset,
     batch_size=op.batch_size,
     prefetch_factor=dp.prefetch_factor,
     num_workers=dp.num_workers,
     shuffle=True,
+    collate_fn=collate_fn,
 )
 
-val_dataset = DiscDataset(val_set, train=True)
+val_dataset = DiscDataset(val_set, transform=transform, train=True)
 val_loader = DataLoader(
     val_dataset,
     batch_size=op.batch_size,
     num_workers=dp.num_workers,
+    collate_fn=collate_fn,
 )
+
 ###################### Optimization ######################
 
 from torch.optim import AdamW
@@ -175,10 +181,9 @@ for epoch in range(epochs):
         model.finetune_language(True)
     for ids, batch in train_bar:
         with DEBUG:
-            inputs = transform(batch["image"], prompt=batch["prompt"]).to(
-                device, torch.bfloat16
-            )
-
+            # `batch` is a nested dict with keys: `pixel_values`, `aux_inputs`, `input_ids`, `attention_mask`
+            # `aux_inputs` is a list of nested dict
+            inputs = container_to(batch, device=device, dtype=torch.bfloat16)
             labels = inputs["input_ids"].clone()
 
             DEBUG.stamp()

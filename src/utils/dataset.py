@@ -25,6 +25,7 @@ class DiscDatasetItem:
     img_path: str
     features: Optional[dict]
 
+
 @dataclass_json
 @dataclass
 class DiscDatasetConfig:
@@ -112,8 +113,8 @@ class DiscDataset(Dataset):
                     transforms.ToTensor(),
                 ]
             )
-        assert (
-            isinstance(transform, transforms.Compose) and not use_trainer
+        assert not (
+            isinstance(transform, transforms.Compose) and use_trainer
         ), "transform shouldn't be a Compose when using trainer"
         self.transform = cast(Transform, transform)
 
@@ -135,7 +136,10 @@ class DiscDataset(Dataset):
         prompt = item.prompt
         if isinstance(prompt, int):
             prompt = self.prompts[prompt]
+
         prompt = apply_chat_template(prompt)
+        if self.is_train:
+            prompt = f"{prompt} {item.gt}"
 
         # if self.use_cache_feature:
         #     features = item.features
@@ -159,7 +163,6 @@ class DiscDataset(Dataset):
         #     return (item.id, inputs)
 
         img = PIL.Image.open(item.img_path).convert("RGB")
-
         if isinstance(self.transform, transforms.Compose):
             img = self.transform(img)
             inputs = {
@@ -168,28 +171,26 @@ class DiscDataset(Dataset):
             }
         else:
             inputs = self.transform(img, prompt=prompt)
-            for key in inputs.keys():
-                inputs[key] = inputs[key].squeeze(0)
+            # for key in inputs.keys():
+            #     if isinstance(inputs[key], torch.Tensor):
+            #         inputs[key] = inputs[key].squeeze(0)
 
-        inputs["use_cache_feat"] = False
-        if self.cache_dir is not None:
-            rgb_path = self.cache_dir / f"{item.id}_rgb.pt"
-            depth_path = self.cache_dir / f"{item.id}_depth.pt"
-            seg_path = self.cache_dir / f"{item.id}_seg.pt"
+        # inputs["use_cache_feat"] = False
+        # if self.cache_dir is not None:
+        #     rgb_path = self.cache_dir / f"{item.id}_rgb.pt"
+        #     depth_path = self.cache_dir / f"{item.id}_depth.pt"
+        #     seg_path = self.cache_dir / f"{item.id}_seg.pt"
 
-            if rgb_path.exists():
-                with open(rgb_path, "rb") as f:
-                    inputs["rgb"] = torch.load(f, map_location="cpu")
-            if depth_path.exists():
-                with open(depth_path, "rb") as f:
-                    inputs["depth"] = torch.load(f, map_location="cpu")
-            if seg_path.exists():
-                with open(seg_path, "rb") as f:
-                    inputs["seg"] = torch.load(f, map_location="cpu")
-            inputs["use_cache_feat"] = True
-
-        if self.is_train:
-            inputs["prompt"] = f"{inputs['prompt']} {item.gt}"
+        #     if rgb_path.exists():
+        #         with open(rgb_path, "rb") as f:
+        #             inputs["rgb"] = torch.load(f, map_location="cpu")
+        #     if depth_path.exists():
+        #         with open(depth_path, "rb") as f:
+        #             inputs["depth"] = torch.load(f, map_location="cpu")
+        #     if seg_path.exists():
+        #         with open(seg_path, "rb") as f:
+        #             inputs["seg"] = torch.load(f, map_location="cpu")
+        #     inputs["use_cache_feat"] = True
 
         return (item.id, inputs)
 

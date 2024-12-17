@@ -122,18 +122,22 @@ class VisionTower(torch.nn.Module):
         if model_params.use_segmentation:
             segmentation_encoder = SegmentationEncoder(
                 model_params.segmentation_model_id,
-                vit,
-                processor,
-                vision_feature_layer,
+                model=vit,
+                processor=processor,
+                segment_type=segment_type,
+                image_target_size=(800, 1200),
+                vision_feature_layer=vision_feature_layer,
                 device=device,
                 torch_dtype=torch_dtype,
             )
             self.auxiliary_encoders.append(segmentation_encoder)
             # No projection for segmentation encoder
             self.auxiliary_projectors.append(nn.Identity())
-            self.processors.append(
-                partial(segmentation_encoder.processor, task_inputs=[segment_type])
-            )
+            # self.processors.append(
+            #     partial(segmentation_encoder.processor, task_inputs=[segment_type])
+            # )
+            self.processors.append(segmentation_encoder.task_processor)
+            # self.processors.append(segmentation_encoder.resized_processor)
             self.cache_postfix.append("seg")
 
         self.n_auxiliary_features = len(self.auxiliary_encoders)
