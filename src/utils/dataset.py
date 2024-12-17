@@ -13,8 +13,6 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from tqdm import tqdm
 
-from src.utils.log import pretty_print
-
 
 @dataclass_json
 @dataclass

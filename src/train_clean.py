@@ -35,7 +35,6 @@ from tqdm import tqdm
 
 import torch
 from liger_kernel.transformers import apply_liger_kernel_to_llama
-from peft import get_peft_model_state_dict
 from pytorch_lightning import seed_everything
 from torch.utils.data import DataLoader
 from transformers.utils import logging
@@ -43,7 +42,6 @@ from transformers.utils import logging
 logging.set_verbosity_error()
 
 from src.models.llava import LlavaPEFT, collate_fn
-from src.models.utils import ensure_all_on_device, ensure_all_same_dtype
 from src.utils import default
 from src.utils.dataset import DiscDataset
 from src.utils import container_to

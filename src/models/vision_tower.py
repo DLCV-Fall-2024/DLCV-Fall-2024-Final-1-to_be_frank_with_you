@@ -1,23 +1,13 @@
-from dataclasses import dataclass
-from functools import partial
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
-import numpy as np
 import torch
 import torch.nn as nn
-from peft import LoraConfig, PeftMixedModel, PeftModel, get_peft_model
-from PIL.Image import Image
-from transformers import (
-    BaseImageProcessor,
-    LlavaForConditionalGeneration,
-    LlavaProcessor,
-)
+from transformers import BaseImageProcessor
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 
 from pathlib import Path
 
 from src.arguments.dataclass import ModelParams
-from src.utils import default
 
 from .encoder import (
     DepthEncoder,
@@ -26,7 +16,7 @@ from .encoder import (
     VisionEncoder,
 )
 from .fuser import FUSERS
-from .utils import AdaLNZero, ensure_all_on_device, ensure_all_same_dtype
+from .utils import AdaLNZero
 
 
 # TODO: Not tested
