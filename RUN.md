@@ -55,12 +55,13 @@ export LD_LIBRARY_PATH=$HOME/.local/mpich/lib:$LD_LIBRARY_PATH
 
 ```bash
 # Non-distributed training
-python -m src.train_clean <RUN_NAME>
+python -m src.train_clean <CONFIG_FLAGS>
 # Distributed training with DeepSpeed
-deepspeed --module src.train_ds <RUN_NAME>
+deepspeed --module src.train_ds <CONFIG_FLAGS>
 ```
 
-> The scripts will create a default configuration in configs/<RUN_NAME>.yaml and exit for the first time.
+> You can use `--name <PRESET_NAME>` to load a configuration preset from YAML file.
+> The scripts will create a preset file with default settings in configs/<RUN_NAME>.yaml and exit for the first time.
 
 ### Assets Structure
 
