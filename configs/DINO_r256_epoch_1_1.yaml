@@ -3,6 +3,7 @@ run_name: null
 seed: 42
 local_rank: -1
 liger_kernel: true
+resume: "outputs/DINO_r256_epoch_1_1_1216_134636/checkpoint/latest.pt"
 model:
   device: cuda
   model_id: llava-hf/llava-1.5-7b-hf

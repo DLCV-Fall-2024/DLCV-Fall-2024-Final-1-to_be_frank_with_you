@@ -114,6 +114,7 @@ class Config(ParamGroup):
     pipeline: PipelineParams = field(default_factory=PipelineParams)
     dataset: DatasetParams = field(default_factory=DatasetParams)
     optimization: OptimizationParams = field(default_factory=OptimizationParams)
+    resume: Optional[str] = None
 
     def load(self, parser: ArgumentParser, sentinel: bool = False):
         super().__init__(parser=parser, name="Configuration Parameters", fill_none=sentinel)

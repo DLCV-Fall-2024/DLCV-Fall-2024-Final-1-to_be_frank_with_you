@@ -13,9 +13,6 @@ parser.add_argument("--name", type=str, help="Name of the config presets")
 Config().load(parser)
 args = parser.parse_args()
 
-# Load configuration from preset and CLI arguments
-from src.utils.experiment import load_config
-
 name = args.name
 config, timestamp, *assets = load_config(
     Config,
@@ -77,6 +74,13 @@ model = LlavaPEFT(
     device=device,
     torch_dtype=torch.bfloat16,
 )
+if resume := config.resume:
+    model.load_state_dict(
+        torch.load(
+            resume,
+            weights_only=True,
+        )
+    )
 # ensure_all_on_device(model, device)
 # ensure_all_same_dtype(model, torch.bfloat16)
 addition_config["model_struct"] = model.get_model_struct()
@@ -247,7 +251,7 @@ for epoch in range(epochs):
     val_bar = tqdm(val_loader)
     val_bar.set_description(f"[Val {epoch}/{epochs}]")
     model.merge_adapter()
-
+    model.to(device, torch.bfloat16)
     with torch.no_grad():
         for ids, batch in val_bar:
             with DEBUG:
@@ -262,6 +266,7 @@ for epoch in range(epochs):
                     **inputs,
                     labels=labels,
                     vision_feature_select_strategy=mp.vision_feature_select_strategy,
+                    other_params={"ids": ids, **batch},
                 )
                 loss = out.loss
 
@@ -269,6 +274,7 @@ for epoch in range(epochs):
 
                 DEBUG.stamp()
                 DEBUG.log_performance(log_per=20)
+            del out, loss, labels
 
     ckpt_path = checkpoint_dir / f"{epoch}.pt"
     model.unmerge_adapter()
