@@ -61,7 +61,7 @@ def arguments():
     parser.add_argument("--prediction", type=str, default=None)
     parser.add_argument("--dataset_name", type=str, default="ntudlcv/dlcv_2024_final1")
     parser.add_argument("--split", type=str, default="val")
-    # parser.add_argument("--save", type=str, default="llama3_eval.json")
+    parser.add_argument("--save", type=str, default="llama3_eval.json")
     parser.add_argument("--max_output_tokens", type=int, default=300)
     return parser.parse_args()
 
@@ -82,16 +82,24 @@ if __name__ == "__main__":
     prediction = json.load(open(args.prediction, "r"))
     NLP_HYPOTHESIS = {key: [value.strip()] for key, value in prediction.items()}
     NLP_REFERENCE = {}
-
+    reference = reference.shuffle(seed=42).shuffle(seed=42)
     result = defaultdict(list)
     save = {}
+    if args.save and os.path.exists(args.save):
+        save = json.load(open(args.save, "r"))
     fail_cases = []
+    for sample_id in save:
+        sample_type = (sample_id.split("_")[1]).lower()
+        result[sample_type].append(save[sample_id]["score"])
     from tqdm import tqdm
 
-    time_limit = 10
+    time_limit = 30
     s_time = time.time()
     for data in tqdm(reference):
         sample_id = data["id"]
+        sample_type = (sample_id.split("_")[1]).lower()
+        if sample_id in save:
+            continue
         score = 0
         if (time.time() - s_time) // 60 > time_limit:
             print("Time limit reached.")
@@ -102,7 +110,6 @@ if __name__ == "__main__":
 
         message = {"reference": "", "prediction": prediction[sample_id]}
         message["reference"] = data["conversations"][1]["value"]
-        sample_type = (sample_id.split("_")[1]).lower()
         messages = formulate_template(args.few_shot, message, sample_type)
         pipeline.tokenizer.chat_template = (
             "{% for message in messages %}"
@@ -133,12 +140,12 @@ if __name__ == "__main__":
             fail_cases.append(sample_id)
         result[sample_type].append(score)
 
-        # save[sample_id] = {
-        #     "prediction": outputs[0]["generated_text"][-1]["content"],
-        #     "score": score
-        # }
-        # with open(args.save, "w") as f:
-        #     json.dump(save, f, indent=4)
+        save[sample_id] = {
+            "prediction": prediction[sample_id],
+            "score": score,
+        }
+        with open(args.save, "w") as f:
+            json.dump(save, f, indent=4)
         NLP_REFERENCE[sample_id] = [data["conversations"][1]["value"]]
 
     NLP_HYPOTHESIS = {key: NLP_HYPOTHESIS[key] for key in NLP_REFERENCE}
