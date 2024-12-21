@@ -21,7 +21,7 @@ class DiscDatasetItem:
     prompt: int | str
     gt: Optional[str]
     img_path: str
-    features: Optional[dict]
+    features: Optional[dict] = None
 
 
 @dataclass_json
@@ -162,16 +162,16 @@ class DiscDataset(Dataset):
 
         img = PIL.Image.open(item.img_path).convert("RGB")
         if isinstance(self.transform, transforms.Compose):
-            img = self.transform(img)
+            transformed_img = self.transform(img)
             inputs = {
-                "image": img,
+                "image": transformed_img,
                 "prompt": prompt,
             }
         else:
             inputs = self.transform(img, prompt=prompt)
-            # for key in inputs.keys():
-            #     if isinstance(inputs[key], torch.Tensor):
-            #         inputs[key] = inputs[key].squeeze(0)
+
+        # Otherwise, workers will open too many files
+        img.close()
 
         # inputs["use_cache_feat"] = False
         # if self.cache_dir is not None:
