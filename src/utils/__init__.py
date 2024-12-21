@@ -10,16 +10,19 @@ def default(val, default_val):
 
 
 # Call `to` for tensors in List or Dict recursively
-def container_to(container, *to_args, **to_kwargs):
+def container_to(container, target_dtypes: List[torch.dtype] = [], device: torch.device = None, dtype: torch.dtype = None):
     if isinstance(container, torch.Tensor):
-        return container.to(*to_args, **to_kwargs)
+        if container.dtype in target_dtypes:
+            return container.to(device=device, dtype=dtype)
+        else:
+            return container.to(device=device)
     elif isinstance(container, (list, tuple)):
         return type(container)(
-            container_to(item, *to_args, **to_kwargs) for item in container
+            container_to(item, target_dtypes, device=device, dtype=dtype) for item in container
         )
     elif isinstance(container, dict):
         return {
-            key: container_to(value, *to_args, **to_kwargs)
+            key: container_to(value, target_dtypes, device=device, dtype=dtype)
             for key, value in container.items()
         }
     return container

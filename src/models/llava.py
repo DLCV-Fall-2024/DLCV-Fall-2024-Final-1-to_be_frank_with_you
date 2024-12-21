@@ -82,9 +82,8 @@ class LlavaPEFT(torch.nn.Module):
         llava.config.image_seq_length = image_seq_length
 
         # Remove projector layers from lora for direct finetuning
-        self.no_lora_but_FF_prefix = getattr(
-            model_params,
-            "no_lora_but_FF_prefix",
+        self.no_lora_but_FF_prefix = default(
+            model_params.no_lora_but_FF_prefix,
             [
                 "multi_modal_projector",
                 "fuser",
@@ -127,7 +126,7 @@ class LlavaPEFT(torch.nn.Module):
             model_params.model_id
         )
         processor.image_processor = self.vision_tower.encoder.processor
-        processor.patch_size = model_params.patch_size
+        processor.patch_size = patch_size
         processor.vision_feature_select_strategy = (
             model_params.vision_feature_select_strategy
         )
@@ -171,31 +170,6 @@ class LlavaPEFT(torch.nn.Module):
             inputs["pixel_values"] = [pixel_values, *aux_inputs]
         else:
             inputs["pixel_values"] = [pixel_values]
-
-        #  TODO: Can delete this part
-        # ## Maintain Backward compatibility and use cache feature ##
-        # if "other_params" in inputs and "use_cache_feat" in inputs["other_params"]:
-        #     use_cache_feat = inputs["other_params"]["use_cache_feat"]
-        #     use_cache_feat = all(use_cache_feat)
-        #     use_cache_feat = use_cache_feat and all(
-        #         [x in inputs["other_params"] for x in ["rgb", "depth", "seg"]]
-        #     )
-        # image_feature_dict = {
-        #     "id": inputs["id"],
-        #     "pixel_values": inputs["pixel_values"],
-        # }
-        # image_feature_dict["feature"] = None
-        # if use_cache_feat:
-        #     image_feature_dict["feature"] = (
-        #         inputs["other_params"]["rgb"],
-        #         [
-        #             inputs["other_params"]["depth"],
-        #             inputs["other_params"]["seg"],
-        #         ],
-        #     )
-
-        # inputs[pixel_values] = image_feature_dict
-        ###########################################################
 
         if self.conditional_fuser:
             language_embeds = self.llava.base_model.get_input_embeddings()(

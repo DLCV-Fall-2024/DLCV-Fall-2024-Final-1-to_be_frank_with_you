@@ -13,6 +13,9 @@ parser.add_argument("--name", type=str, help="Name of the config presets")
 Config().load(parser)
 args = parser.parse_args()
 
+# Load configuration from preset and CLI arguments
+from src.utils.experiment import load_config
+
 name = args.name
 config, timestamp, *assets = load_config(
     Config,
@@ -186,7 +189,8 @@ for epoch in range(epochs):
         with DEBUG:
             # `batch` is a nested dict with keys: `pixel_values`, `aux_inputs`, `input_ids`, `attention_mask`
             # `aux_inputs` is a list of nested dict
-            inputs = container_to(batch, device=device, dtype=torch.bfloat16)
+            target_dtypes = [torch.float16, torch.float32, torch.float64]
+            inputs = container_to(batch, target_dtypes, device=device, dtype=torch.bfloat16)
             # `input_ids` and `attention_mask` should be long tensors
             inputs["input_ids"] = inputs["input_ids"].to(torch.long)
             inputs["attention_mask"] = inputs["attention_mask"].to(torch.long)
