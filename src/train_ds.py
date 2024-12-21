@@ -1,3 +1,4 @@
+from typing import Any, Tuple
 import os
 import sys
 import argparse
@@ -52,23 +53,23 @@ from pytorch_lightning import seed_everything
 from torch.utils.data import DataLoader
 from torch.utils.data import DistributedSampler
 
-from src.models.llava import LlavaPEFT
+from src.models.llava import LlavaPEFT, collate_fn
 from src.utils.experiment import dump_config
-from src.utils import default
+from src.utils import container_to, default
 from src.utils.dataset import DiscDataset
 from src.utils.log import (
     PerformanceMonitor,
     Timer,
     Profiler,
-    init_logger,
-    init_wandb,
+    # init_logger,
+    # init_wandb,
     print_once,
 )
 
+addition_config = {}
 mp = config.model
 dp = config.dataset
 dsp = config.deepspeed
-addition_config = {}
 
 seed_everything(config.seed)
 
@@ -82,14 +83,19 @@ model = LlavaPEFT(
     device=device,
     torch_dtype=torch.bfloat16,
 )
+
 addition_config["model_struct"] = model.get_model_struct()
+
+transform = model.transform
+processor = model.processor
 
 trainable_params, all_param = model.llava.get_nb_trainable_parameters()
 print(
     f"Trainable: {trainable_params/1e6:.4f}M | All: {all_param/1e6:.4f}M | Ratio: {trainable_params/all_param * 100:.3f}%"
 )
 
-dump_config(addition_config, output_dir)
+dump_config(config, output_dir / "config.yaml")
+dump_config(addition_config, output_dir / "model_config.yaml")
 del addition_config
 
 ### We don't transform the inputs in the dataset since we don't know the prompt size in advance (fix-sized padding introduces overhead)
@@ -101,7 +107,7 @@ assert (
     train_set.exists() and val_set.exists()
 ), f"Dataset not found. {dataset_dir} should contain 'train' and 'val' folders."
 
-train_dataset = DiscDataset(train_set, train=True)
+train_dataset = DiscDataset(train_set, transform=transform, train=True)
 train_sampler = DistributedSampler(
     train_dataset,
     num_replicas=world_size,
@@ -114,37 +120,39 @@ train_loader = DataLoader(
     prefetch_factor=dp.prefetch_factor,
     num_workers=dp.num_workers,
     sampler=train_sampler,
+    collate_fn=collate_fn,
 )
 
-val_dataset = DiscDataset(val_set, train=True)
+val_dataset = DiscDataset(val_set, transform=transform, train=True)
+val_sampler = DistributedSampler(
+    val_dataset,
+    num_replicas=world_size,
+    rank=local_rank,
+    shuffle=False,
+)
 val_loader = DataLoader(
     val_dataset,
     batch_size=dsp.batch_size,
     num_workers=dp.num_workers,
+    sampler=val_sampler,
+    collate_fn=collate_fn,
 )
 
 ######################### Logging ########################
 
 if config.wandb:
-    project_name = default(config.project_name, "DLCV-FINAL-Traffic-LLaVA")
-    run_name = default(
-        config.run_name, f"{name}-{mp.model_id.split('/')[-1]}-{timestamp}"
+    team = "DLCV-Final"
+    project = default(config.project_name, "DLCV-FINAL-Traffic-LLaVA")
+    group = default(config.run_name, f"{name}-{mp.model_id.split('/')[-1]}-{timestamp}")
+    dsp.config["wandb"] = dict(
+        enabled=True,
+        team=team,
+        project=project,
+        group=group,
     )
 
-    # DeepSpeed doesn't provide run_name setting, so manually init is required
-    print(f"Logging to {run_name}")
-    init_wandb(
-        project_name,
-        run_name,
-        config=OmegaConf.to_container(config, resolve=True),
-        log_dir=log_dir,
-        local_rank=local_rank,
-    )
-
-    dsp.config["wandb"] = dict(enabled=True)
-
-logger = init_logger(local_rank=local_rank)
-print(type(logger))
+# logger = init_logger(local_rank=local_rank)
+# print(type(logger))
 
 timer = Timer(10 * 60)  # 10 minutes
 DEBUG = PerformanceMonitor(config.debug)
@@ -193,11 +201,25 @@ dsp.config["scheduler"] = dict(
 
 ###################### Training ######################
 
-model_engine, _, _, scheduler = deepspeed.initialize(
-    config=OmegaConf.to_container(dsp.config, resolve=True),
-    model=model,
-)
-model_engine: deepspeed.DeepSpeedEngine
+def initialize_model(model) -> Tuple[deepspeed.DeepSpeedEngine, Any]:
+    model_engine, _, _, scheduler = deepspeed.initialize(
+        config=OmegaConf.to_container(dsp.config, resolve=True),
+        model=model,
+    )
+    model_engine: deepspeed.DeepSpeedEngine
+    return model_engine, scheduler
+
+model.finetune_language(config.finetune_language)
+model_engine, scheduler = initialize_model(model)
+
+if config.resume:
+    print(f"Loading checkpoint from {config.resume}")
+    model_engine.load_checkpoint(
+        config.resume,
+        tag=config.resume_tag,
+        load_module_strict=False,
+        load_module_only=True,
+    )
 
 with Profiler(profile=config.profile) as PROFILER:
     for epoch in range(dsp.epochs):
@@ -207,10 +229,13 @@ with Profiler(profile=config.profile) as PROFILER:
         train_bar.set_description(f"[Train {epoch}/{dsp.epochs}]")
         for ids, batch in train_bar:
             with DEBUG:
-                inputs = model.transform(
-                    batch["image"],
-                    prompt=batch["prompt"],
-                ).to(device=device, dtype=torch.bfloat16)
+                # `batch` is a nested dict with keys: `pixel_values`, `aux_inputs`, `input_ids`, `attention_mask`
+                # `aux_inputs` is a list of nested dict
+                target_dtypes = [torch.float16, torch.float32, torch.float64]
+                inputs = container_to(batch, target_dtypes, device=device, dtype=torch.bfloat16)
+                # `input_ids` and `attention_mask` should be long tensors
+                inputs["input_ids"] = inputs["input_ids"].to(torch.long)
+                inputs["attention_mask"] = inputs["attention_mask"].to(torch.long)
                 labels = inputs["input_ids"].clone()
 
                 DEBUG.stamp()
@@ -224,11 +249,12 @@ with Profiler(profile=config.profile) as PROFILER:
                         **inputs,
                         labels=labels,
                         vision_feature_select_strategy=mp.vision_feature_select_strategy,
-                        use_cache=True,
+                        use_cache=False,
+                        other_params={"ids": ids, **batch},
                     )
                 DEBUG.stamp()
-                DEBUG.set_params(**{"loss": outputs.loss})
 
+                DEBUG.set_params(**{"loss": outputs.loss})
                 loss = outputs.loss
                 model_engine.backward(loss)
 
@@ -242,23 +268,64 @@ with Profiler(profile=config.profile) as PROFILER:
                 # weight update
                 model_engine.step()
                 global_step += 1
-                logger({"train/loss": loss, "global_step": global_step})
-                if global_step % dsp.accumulation_steps == 0:
-                    logger(
-                        {
-                            "train/lr": scheduler.get_last_lr(),
-                            "global_step": global_step,
-                        }
-                    )
+
+                # NOTE: DeepSpeed provides its own logging
+                # logger({"train/loss": loss, "global_step": global_step})
+                # if global_step % dsp.accumulation_steps == 0:
+                #     logger(
+                #         {
+                #             "train/lr": scheduler.get_last_lr(),
+                #             "global_step": global_step,
+                #         }
+                #     )
 
                 DEBUG.stamp()
                 DEBUG.stamp()
                 DEBUG.log_performance(log_per=20)
                 del outputs, loss, labels
 
+                dist.barrier()
                 if timer.timesup():
-                    model_engine.save_checkpoint(checkpoint_dir)
+                    model_engine.save_checkpoint(checkpoint_dir, exclude_frozen_parameters=True)
                     timer.reset()
+
+        model_engine.eval()
+        
+        val_bar = tqdm(val_loader)
+        val_bar.set_description(f"[Val {epoch}/{dsp.epochs}]")
+        # NOTE: Disabled since it requires re-initializing the model_engine
+        # model.merge_adapter()
+        with torch.no_grad():
+            for ids, batch in val_bar:
+                with DEBUG:
+                    # `batch` is a nested dict with keys: `pixel_values`, `aux_inputs`, `input_ids`, `attention_mask`
+                    # `aux_inputs` is a list of nested dict
+                    target_dtypes = [torch.float16, torch.float32, torch.float64]
+                    inputs = container_to(batch, target_dtypes, device=device, dtype=torch.bfloat16)
+                    # `input_ids` and `attention_mask` should be long tensors
+                    inputs["input_ids"] = inputs["input_ids"].to(torch.long)
+                    inputs["attention_mask"] = inputs["attention_mask"].to(torch.long)
+                    labels = inputs["input_ids"].clone()
+
+                    DEBUG.stamp()
+                    DEBUG.set_params(**{"labels": labels})
+
+                    outputs = model_engine.forward(
+                        **inputs,
+                        labels=labels,
+                        vision_feature_select_strategy=mp.vision_feature_select_strategy,
+                        other_params={"ids": ids, **batch},
+                    )
+                    loss = outputs.loss
+
+                    # logger({"val/loss": loss.item()})
+
+                    DEBUG.stamp()
+                    DEBUG.log_performance(log_per=20)
+                    del outputs, loss, labels
+
+        dist.barrier()
+        model_engine.save_checkpoint(checkpoint_dir, tag=f"{epoch}", exclude_frozen_parameters=True)
 
 if local_rank == 0:
     PROFILER.export(output_dir / "trace.json")

@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 from argparse import ArgumentParser
 
 from src.arguments import ParamGroup
@@ -19,6 +19,14 @@ class ModelParams(ParamGroup):
     fuser_id: str = "gemini"
     conditional_fuser: bool = True
     condition_dropout: float = 0.3
+    no_lora_but_FF_prefix: List[str] = field(
+        default_factory=lambda: [
+            "multi_modal_projector",
+            "fuser",
+            "vision_tower.AdaLNZero",
+            "auxiliary_projectors",
+        ]
+    )
 
     vision_feature_select_strategy: str = "full"  # "default" or "full"
     gradient_checkpointing: bool = True
@@ -50,8 +58,8 @@ class ModelParams(ParamGroup):
 @dataclass
 class DatasetParams(ParamGroup):
     dataset_path: str = "data"
-    num_workers: int = 10
-    prefetch_factor: int = 2
+    num_workers: int = 20
+    prefetch_factor: int = 40
 
     def load(self, parser: ArgumentParser, sentinel: bool = False):
         super().__init__(parser=parser, name="Dataset Parameters", fill_none=sentinel)
@@ -84,6 +92,10 @@ class Config(ParamGroup):
     wandb: bool = True
     project_name: Optional[str] = None
     run_name: Optional[str] = None
+    
+    finetune_language: bool = True
+    resume: Optional[str] = None
+    resume_tag: Optional[str] = None
 
     model: ModelParams = field(default_factory=ModelParams)
     dataset: DatasetParams = field(default_factory=DatasetParams)
