@@ -19,7 +19,6 @@ from .fuser import FUSERS
 from .utils import AdaLNZero
 
 
-# TODO: Not tested
 class MergedImageProcessor(BaseImageProcessor):
 
     def __init__(
@@ -40,14 +39,9 @@ class MergedImageProcessor(BaseImageProcessor):
         if "padding" in kwargs:
             del kwargs["padding"]
         inputs = self.processors[0](images, **kwargs)
-        image_shape = inputs["pixel_values"].shape
-        inputs["pixel_values"] = inputs["pixel_values"].to(
-            device=self.device, dtype=self.torch_dtype
-        )
         auxiliary_inputs = []
         for processor in self.processors[1:]:
             aux_inputs = processor(images, **kwargs)
-            aux_inputs.to(device=self.device, dtype=self.torch_dtype)
             auxiliary_inputs.append(aux_inputs)
 
         inputs["aux_inputs"] = auxiliary_inputs
