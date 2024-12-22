@@ -14,6 +14,7 @@ from transformers import (
     OneFormerProcessor,
 )
 from transformers.feature_extraction_utils import BatchFeature
+
 from .base import ImageEncoderOutput, VisionEncoder
 
 
@@ -27,11 +28,11 @@ class SegmentationEncoder(VisionEncoder):
         segment_type: Optional[str] = "semantic",
         vision_feature_layer: Optional[int] = None,
         image_target_size: Optional[Tuple[int, int]] = None,
+        id2rgb_path: Optional[str] = "id2rgb.pt",
         torch_dtype: Optional[str] = "float16",
         device: Optional[str] = "cuda",
         **kwargs,
     ):
-
         if model_id is not None:
             model = OneFormerForUniversalSegmentation.from_pretrained(
                 model_id, torch_dtype=torch_dtype
@@ -46,6 +47,7 @@ class SegmentationEncoder(VisionEncoder):
             )
             processor.image_processor = image_processor
 
+            # WARNING: Not sure if this is necessary
             model = model.to(device)
             model_id = None
 
@@ -58,27 +60,20 @@ class SegmentationEncoder(VisionEncoder):
         self.torch_dtype = torch_dtype
         self.device = device
 
-        self.id2rgb = torch.tensor(
-            [
-                [
-                    int(c * 255) for c in colorsys.hsv_to_rgb(i / 255, 1.0, 1.0)
-                ]  # Saturation=1, Value=1
-                for i in range(256)
-            ],
-            dtype=torch.uint8,
-        ).to(self.device)
-
-    # def resized_processor(self, images, **kwargs):
-    #     inputs = self.image_processor(images, task_inputs=[self.segment_type], **kwargs)
-    #     pixel_values = inputs["pixel_values"]
-    #     pixel_values = self.image_resize(pixel_values)
-    #     return BatchFeature(dict(pixel_values=pixel_values))
+        # self.id2rgb = torch.tensor(
+        #     [
+        #         [
+        #             int(c * 255) for c in colorsys.hsv_to_rgb(i / 255, 1.0, 1.0)
+        #         ]  # Saturation=1, Value=1
+        #         for i in range(255)
+        #     ]
+        #     + [[0, 0, 0]],  # Black for ignore value
+        #     dtype=torch.uint8,
+        # ).to(self.device)
+        self.id2rgb = torch.load(id2rgb_path).to(self.device)
 
     def task_processor(self, images, **kwargs):
         return self.processor(images, task_inputs=[self.segment_type], **kwargs)
-        # inputs = self.image_processor(images, task_inputs=[self.segment_type], **kwargs)
-        # pixel_values = inputs["pixel_values"]
-        # return BatchFeature(dict(pixel_values=pixel_values))
 
     @property
     def hidden_states_dim(self) -> int:
@@ -150,6 +145,11 @@ class SegmentationEncoder(VisionEncoder):
             use_pred=True,
         )
         return out
+
+
+if __name__ == "__main__":
+    id2rgb = torch.randint(0, 256, (256, 3), dtype=torch.uint8)
+    torch.save(id2rgb, "id2rgb.pt")
 
 
 """

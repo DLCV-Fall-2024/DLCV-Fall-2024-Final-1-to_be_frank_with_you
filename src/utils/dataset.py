@@ -342,6 +342,31 @@ import torch
 from transformers import AutoModel, AutoProcessor
 
 
+from src.models.encoder.segmentation import SegmentationEncoder
+from functools import partial
+
+
+def setup_segmentation_model(
+    model_id: str, device: str = "cuda", torch_dtype: torch.dtype = torch.bfloat16
+):
+    segmentation_encoder = SegmentationEncoder(
+        model_id,
+        segment_type="panoptic",
+        # segment_type="semantic",
+        image_target_size=(800, 1200),
+        vision_feature_layer=-2,
+        device=device,
+        torch_dtype=torch_dtype,
+    )
+    for p in segmentation_encoder.parameters():
+        p.requires_grad = False
+    segmentation_encoder.eval()
+
+    processor = segmentation_encoder.task_processor
+
+    return segmentation_encoder, processor
+
+
 def process_output(output, vision_feature_layer: int = -2):
     hidden_states = output.hidden_states
     features = hidden_states[vision_feature_layer]
@@ -361,6 +386,110 @@ PROCESS_OUTPUT_FUNC = {
     "depth": process_depth_output,
     "segmentation": process_segmentation_output,
 }
+
+SETUP_MODEL_FUNC = {
+    "segmentation": setup_segmentation_model,
+}
+
+
+@app.command("extract_processed")
+def extract_processed_images(
+    split: str = typer.Option("all", help="Split to preprocess"),
+    cache_dir: str = typer.Option("./data", help="Cache directory"),
+    feature_name: str = typer.Option("default", help="Feature name"),
+    model_id: str = typer.Option("facebook/dinov2-large", help="Encoder id"),
+    batch_size: int = typer.Option(16, help="Batch size"),
+):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
+
+    assert split in VALID_SPLIT, f"split must be one of {VALID_SPLIT}"
+    split = [split] if split != "all" else VALID_SPLIT[:-1]
+
+    cache_dir = Path(cache_dir)
+    assert cache_dir.exists(), f"cache directory {cache_dir} not found"
+
+    stat_path = cache_dir / "statistics.json"
+    assert stat_path.exists(), f"statistics.json not found in {cache_dir}"
+    statistics = json.load(open(stat_path, "r"))
+
+    # Check if splits exist
+    for s in split:
+        split_dir = cache_dir / s
+        assert split_dir.exists(), f"split directory {split_dir} not found"
+        config_path = split_dir / "config.json"
+        assert config_path.exists(), f"config.json not found in {split_dir}"
+
+    # Load model
+    print(f"Loading model {model_id}")
+    model, processor = SETUP_MODEL_FUNC[feature_name](
+        model_id, device, torch_dtype=torch.float16
+    )
+    print(f"Model loaded: {type(model)}")
+
+    model_name = model_id.replace("/", "_")
+
+    for s in split:
+        split_dir = cache_dir / s
+        config_path = split_dir / "config.json"
+        config = json.load(open(config_path, "r"))
+
+        feature_dir = split_dir / "features" / feature_name / model_name
+        feature_dir.mkdir(exist_ok=True, parents=True)
+
+        batch_index = []
+        batch_img = []
+        batch_name = []
+
+        data = config["data"]
+        for i, item in enumerate(tqdm(data)):
+            img_path = item["img_path"]
+            img_name = Path(img_path).stem
+
+            img = PIL.Image.open(img_path).convert("RGB")
+
+            batch_index.append(i)
+            batch_img.append(img)
+            batch_name.append(img_name)
+
+            if len(batch_index) == batch_size or i == len(data) - 1:
+                processed = processor(
+                    batch_img,
+                    return_tensors="pt",  # return as pytorch tensors
+                    padding=True,
+                    do_rescale=True,
+                )
+                processed.to(device="cuda", dtype=torch.float16)
+
+                output = model(**processed)
+                preds = output["predictions"]
+                preds = preds.detach().cpu()  # [1, 3, 800, 1200]
+                # convert back to PIL
+                preds = [
+                    PIL.Image.fromarray(pred.permute(1, 2, 0).to(torch.uint8).numpy())
+                    for pred in preds
+                ]
+
+                for i, pred, name in zip(batch_index, preds, batch_name):
+                    processed_image_path = feature_dir / f"{name}.jpg"
+                    pred.save(processed_image_path)
+
+                    if "features" not in data[i]:
+                        data[i]["features"] = {}
+                    if feature_name not in data[i]["features"]:
+                        data[i]["features"][feature_name] = {}
+                    data[i]["features"][feature_name][model_name] = str(processed_image_path)
+
+                batch_index = []
+                batch_img = []
+                batch_name = []
+
+                for img in batch_img:
+                    img.close()
+
+                del processed, output, preds
+
+        json.dump(config, open(config_path, "w"), indent=4)
 
 
 @app.command("extract")
