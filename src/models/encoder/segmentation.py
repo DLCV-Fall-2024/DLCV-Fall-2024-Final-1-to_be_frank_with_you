@@ -70,7 +70,7 @@ class SegmentationEncoder(VisionEncoder):
         #     + [[0, 0, 0]],  # Black for ignore value
         #     dtype=torch.uint8,
         # ).to(self.device)
-        self.id2rgb = torch.load(id2rgb_path).to(self.device)
+        self.id2rgb = torch.load(id2rgb_path, weights_only=True).to(self.device)
 
     def task_processor(self, images, **kwargs):
         return self.processor(images, task_inputs=[self.segment_type], **kwargs)

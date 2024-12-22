@@ -117,21 +117,41 @@ assert (
     train_set.exists() and val_set.exists()
 ), f"Dataset not found. {dataset_dir} should contain 'train' and 'val' folders."
 
-train_dataset = DiscDataset(train_set, transform=transform, train=True)
+num_workers = dp.num_workers
+prefetch_factor = dp.prefetch_factor if num_workers > 0 else None
+
+train_dataset = DiscDataset(
+    train_set,
+    transform=transform,
+    train=True,
+    use_processed=mp.use_processed,
+    encoder_id=mp.encoder_id,
+    depth_model_id=mp.depth_model_id,
+    segmentation_model_id=mp.segmentation_model_id,
+)
 train_loader = DataLoader(
     train_dataset,
     batch_size=op.batch_size,
-    prefetch_factor=dp.prefetch_factor,
-    num_workers=dp.num_workers,
+    prefetch_factor=prefetch_factor,
+    num_workers=num_workers,
     shuffle=True,
     collate_fn=collate_fn,
 )
 
-val_dataset = DiscDataset(val_set, transform=transform, train=True)
+val_dataset = DiscDataset(
+    val_set,
+    transform=transform,
+    train=True,
+    use_processed=mp.use_processed,
+    encoder_id=mp.encoder_id,
+    depth_model_id=mp.depth_model_id,
+    segmentation_model_id=mp.segmentation_model_id,
+)
 val_loader = DataLoader(
     val_dataset,
     batch_size=op.batch_size,
-    num_workers=dp.num_workers,
+    prefetch_factor=prefetch_factor,
+    num_workers=num_workers,
     collate_fn=collate_fn,
 )
 
@@ -208,7 +228,6 @@ for epoch in range(epochs):
                     labels=labels,
                     vision_feature_select_strategy=mp.vision_feature_select_strategy,
                     use_cache=use_cache,
-                    other_params={"ids": ids, **batch},
                 )
             DEBUG.stamp()
 
@@ -270,7 +289,7 @@ for epoch in range(epochs):
                     **inputs,
                     labels=labels,
                     vision_feature_select_strategy=mp.vision_feature_select_strategy,
-                    other_params={"ids": ids, **batch},
+                    # other_params={"ids": ids, **batch},
                 )
                 loss = out.loss
 

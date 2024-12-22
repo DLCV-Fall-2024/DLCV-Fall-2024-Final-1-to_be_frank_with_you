@@ -14,8 +14,11 @@ class ModelParams(ParamGroup):
     encoder_id: str = "facebook/dinov2-large"
 
     share_vit: bool = False
+    use_processed: bool = True
+
     use_depth: bool = True
     depth_model_id: str = "depth-anything/Depth-Anything-V2-Small-hf"
+    
     use_segmentation: bool = True
     segmentation_model_id: str = "shi-labs/oneformer_ade20k_dinat_large"
 
