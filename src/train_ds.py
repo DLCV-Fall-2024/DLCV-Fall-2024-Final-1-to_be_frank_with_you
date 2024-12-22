@@ -117,7 +117,6 @@ train_dataset = DiscDataset(
     transform=transform,
     train=True,
     use_processed=mp.use_processed,
-    encoder_id=mp.encoder_id,
     depth_model_id=mp.depth_model_id,
     segmentation_model_id=mp.segmentation_model_id,
 )
@@ -141,7 +140,6 @@ val_dataset = DiscDataset(
     transform=transform,
     train=True,
     use_processed=mp.use_processed,
-    encoder_id=mp.encoder_id,
     depth_model_id=mp.depth_model_id,
     segmentation_model_id=mp.segmentation_model_id,
 )

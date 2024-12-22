@@ -45,9 +45,8 @@ class DiscDataset(Dataset):
         trainer_input_kwargs: Optional[dict] = None,
         cache_dir: Optional[str] = ".cache",
         use_processed: bool = False,
-        encoder_id: Optional[str] = None,
-        depth_model_id: Optional[str] = None,
-        segmentation_model_id: Optional[str] = None,
+        depth_model_id: str = "",
+        segmentation_model_id: str = "",
     ):
         path = Path(path)
         img_dir = path / "images"
@@ -61,44 +60,52 @@ class DiscDataset(Dataset):
         self.processed_dir: Optional[Dict[str, Path]] = None
         self.process_model_id: Optional[Dict[str, str]] = None
         if use_processed:
-            # if encoder_id is not None:
-            #     encoder_id = encoder_id.replace("/", "_")
-            # if depth_model_id is not None:
-            #     depth_model_id = depth_model_id.replace("/", "_")
-            if segmentation_model_id is not None:
-                segmentation_model_id = segmentation_model_id.replace("/", "_")
+            depth_model_id = depth_model_id.replace("/", "_")
+            segmentation_model_id = segmentation_model_id.replace("/", "_")
 
             cache_dir = path / "features"
-            # default_processed_dir = cache_dir / "default" / encoder_id
-            # depth_processed_dir = cache_dir / "depth" / depth_model_id
+            depth_processed_dir = cache_dir / "depth" / depth_model_id
             segmentation_processed_dir = (
                 cache_dir / "segmentation" / segmentation_model_id
             )
 
-            # default_processed_enable = default_processed_dir.exists()
-            # depth_processed_enable = depth_processed_dir.exists()
+            depth_processed_enable = depth_processed_dir.exists()
             segmentation_processed_enable = segmentation_processed_dir.exists()
 
             # Check if config has features
             with open(config_path, "r") as f:
                 config = cast(DiscDatasetConfig, DiscDatasetConfig.from_json(f.read()))
 
-            # TODO: Reactivate this after the generation is donw
-            # for item in config.data:
-            #     if item.features is None:
-            #         assert False, f"processed images not found for item {item.id}"
-            #     # if default_processed_enable and item.features.get("default", {})[encoder_id] is None:
-            #     #     assert False, f"default processed image not found for item {item.id}"
-            #     # if depth_processed_enable and item.features.get("depth", {})[depth_model_id] is None:
-            #     #     assert False, f"depth processed image not found for item {item.id}"
-            #     if segmentation_processed_enable and item.features.get("segmentation", {})[segmentation_model_id] is None:
-            #         assert False, f"segmentation processed image not found for item {item.id}"
+            # TODO: Reactivate this after the generation is done
+            for item in config.data:
+                if item.features is None:
+                    assert False, f"processed images not found for item {item.id}"
+                if (
+                    depth_processed_enable
+                    and item.features.get("depth", {})[depth_model_id] is None
+                ):
+                    assert False, f"depth processed image not found for item {item.id}"
+                if (
+                    segmentation_processed_enable
+                    and item.features.get("segmentation", {})[segmentation_model_id]
+                    is None
+                ):
+                    assert (
+                        False
+                    ), f"segmentation processed image not found for item {item.id}"
             self.processed_dir = {}
             self.process_model_id = {}
 
+            if depth_processed_enable:
+                self.processed_dir["depth"] = depth_processed_dir
+                self.process_model_id["depth"] = depth_model_id
+                print(f"Using processed images for depth in: {depth_model_id}")
             if segmentation_processed_enable:
                 self.processed_dir["segmentation"] = segmentation_processed_dir
                 self.process_model_id["segmentation"] = segmentation_model_id
+                print(
+                    f"Using processed images for segmentation in: {segmentation_model_id}"
+                )
 
         with open(config_path, "r") as f:
             config = cast(DiscDatasetConfig, DiscDatasetConfig.from_json(f.read()))
@@ -147,34 +154,11 @@ class DiscDataset(Dataset):
         if self.processed_dir:
             features = item.features
             for key, dir in self.processed_dir.items():
-                # NOTE: We have processed image path in config file but not used here,
-                #       consider remove them in config file
                 model_id = self.process_model_id[key]
                 processed_image_path = features[key][model_id]
                 processed_images[key] = PIL.Image.open(processed_image_path).convert(
                     "RGB"
                 )
-
-        # if self.use_cache_feature:
-        #     features = item.features
-        #     default_feature_path = features["default"][self.encoder_id]
-        #     depth_feature_path = features["depth"][self.depth_model_id]
-        #     segmentation_feature_path = features["segmentation"][self.segmentation_model_id]
-
-        #     default_feature = torch.load(default_feature_path)
-        #     depth_feature = torch.load(depth_feature_path)
-        #     segmentation_feature = torch.load(segmentation_feature_path)
-
-        #     inputs = {
-        #         "image_feature": default_feature,
-        #         "auxiliary_features": [depth_feature, segmentation_feature],
-        #         "prompt": prompt,
-        #     }
-
-        #     if self.is_train:
-        #         inputs["prompt"] = f"{inputs['prompt']} {item.gt}"
-
-        #     return (item.id, inputs)
 
         # NOTE: Currently, we directly use given transform for better performance
         # if isinstance(self.transform, transforms.Compose):
@@ -185,30 +169,12 @@ class DiscDataset(Dataset):
         #     }
         # else:
         #     inputs = self.transform(img, prompt=prompt)
-        # TODO: Pass processed images into transform
         inputs = self.transform(image, processed_images=processed_images, prompt=prompt)
 
         # Otherwise, workers will open too many files
         image.close()
         for processed_image in processed_images.values():
             processed_image.close()
-
-        # inputs["use_cache_feat"] = False
-        # if self.cache_dir is not None:
-        #     rgb_path = self.cache_dir / f"{item.id}_rgb.pt"
-        #     depth_path = self.cache_dir / f"{item.id}_depth.pt"
-        #     seg_path = self.cache_dir / f"{item.id}_seg.pt"
-
-        #     if rgb_path.exists():
-        #         with open(rgb_path, "rb") as f:
-        #             inputs["rgb"] = torch.load(f, map_location="cpu")
-        #     if depth_path.exists():
-        #         with open(depth_path, "rb") as f:
-        #             inputs["depth"] = torch.load(f, map_location="cpu")
-        #     if seg_path.exists():
-        #         with open(seg_path, "rb") as f:
-        #             inputs["seg"] = torch.load(f, map_location="cpu")
-        #     inputs["use_cache_feat"] = True
 
         return (item.id, inputs)
 
@@ -226,7 +192,6 @@ class DiscDataset(Dataset):
         inputs["labels"] = inputs["input_ids"].clone()
         inputs["id"] = item.id
         inputs.update(self.trainer_input_kwargs)
-        # pretty_print(inputs)
 
         return inputs
 
@@ -443,10 +408,9 @@ def extract_processed_images(
 
     # Load model
     print(f"Loading model {model_id}")
-    model, processor = SETUP_MODEL_FUNC[feature_name](
+    processor = SETUP_MODEL_FUNC[feature_name](
         model_id, device, torch_dtype=torch.float16
     )
-    print(f"Model loaded: {type(model)}")
 
     model_name = model_id.replace("/", "_")
 
@@ -513,7 +477,7 @@ def extract_processed_images(
                 for img in batch_img:
                     img.close()
 
-                del processed_images, output, preds
+                del processed_images
 
         json.dump(config, open(config_path, "w"), indent=4)
 

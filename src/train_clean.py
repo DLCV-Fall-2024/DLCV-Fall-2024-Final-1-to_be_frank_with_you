@@ -125,7 +125,6 @@ train_dataset = DiscDataset(
     transform=transform,
     train=True,
     use_processed=mp.use_processed,
-    encoder_id=mp.encoder_id,
     depth_model_id=mp.depth_model_id,
     segmentation_model_id=mp.segmentation_model_id,
 )
@@ -143,7 +142,6 @@ val_dataset = DiscDataset(
     transform=transform,
     train=True,
     use_processed=mp.use_processed,
-    encoder_id=mp.encoder_id,
     depth_model_id=mp.depth_model_id,
     segmentation_model_id=mp.segmentation_model_id,
 )
@@ -289,7 +287,6 @@ for epoch in range(epochs):
                     **inputs,
                     labels=labels,
                     vision_feature_select_strategy=mp.vision_feature_select_strategy,
-                    # other_params={"ids": ids, **batch},
                 )
                 loss = out.loss
 
