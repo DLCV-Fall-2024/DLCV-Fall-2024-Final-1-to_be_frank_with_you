@@ -53,4 +53,11 @@ class VisionEncoder(nn.Module):
             return self.model.config.neck_hidden_sizes[-1]
 
     def forward(self, pixel_values: torch.Tensor, **kwargs) -> ImageEncoderOutput:
-        return self.model(pixel_values, **kwargs)
+        output = self.model(pixel_values, **kwargs)
+        return ImageEncoderOutput(
+            predictions=getattr(output, "last_hidden_state", None),
+            hidden_states=getattr(output, "hidden_states", None),
+            attentions=getattr(output, "attentions", None),
+            loss=getattr(output, "loss", None),
+            use_pred=getattr(output, "loss", False),
+        )

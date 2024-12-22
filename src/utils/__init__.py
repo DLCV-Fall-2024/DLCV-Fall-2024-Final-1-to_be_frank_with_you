@@ -30,9 +30,7 @@ def container_to(container, target_dtypes: List[torch.dtype] = [], device: torch
 
 # Concatenate tensors in different List or Dict recursively
 def iterate_container(container: Dict | List | Tuple | torch.Tensor | Any):
-    if isinstance(container, torch.Tensor):
-        yield (container, [])
-    elif isinstance(container, (list, tuple)):
+    if isinstance(container, (list, tuple)):
         for i, item in enumerate(container):
             for tensor, paths in iterate_container(item):
                 yield (tensor, [i] + paths)
@@ -41,7 +39,9 @@ def iterate_container(container: Dict | List | Tuple | torch.Tensor | Any):
             for tensor, paths in iterate_container(value):
                 yield (tensor, [key] + paths)
     else:
-        raise ValueError(f"Unsupported type: {type(container)}")
+        if not isinstance(container, torch.Tensor):
+            container = torch.tensor([container])
+        yield (container, [])
 
 
 def container_cat(containers: List[Dict | List | Tuple | torch.Tensor], dim: int = 0):
@@ -66,13 +66,6 @@ def container_cat(containers: List[Dict | List | Tuple | torch.Tensor], dim: int
 
     return cated
 
-# if __name__ == "__main__":
-#     C = {
-#         "a": [torch.randn(1, 3), torch.randn(1, 2)],
-#         "b": [torch.randn(1, 3), torch.randn(1, 2)],
-#     }
-#     print(container_cat([C, C], dim=0))
-
 
 def batch_feature_to_dict(
     container: Dict | List | Tuple | torch.Tensor | BatchFeature | Any,
@@ -81,7 +74,5 @@ def batch_feature_to_dict(
         return {key: batch_feature_to_dict(value) for key, value in container.items()}
     elif isinstance(container, (list, tuple)):
         return type(container)(batch_feature_to_dict(item) for item in container)
-    elif isinstance(container, torch.Tensor):
-        return container
     else:
-        raise ValueError(f"Unsupported type: {type(container)}")
+        return container

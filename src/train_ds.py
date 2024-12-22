@@ -24,7 +24,9 @@ local_rank = args.local_rank
 
 dist.init_process_group()
 world_size = dist.get_world_size()
-device = f"{deepspeed.get_accelerator().device_name()}:{local_rank}"
+
+accelerator = deepspeed.get_accelerator()
+device = f"{accelerator.device_name()}:{local_rank}"
 
 # Load configuration from preset and CLI arguments
 from src.utils.experiment import load_config
@@ -80,7 +82,7 @@ model = LlavaPEFT(
     model_params=mp,
     gradient_checkpointing=True,
     lora_config=mp.lora_config,
-    device=device,
+    # device=device,
     torch_dtype=torch.bfloat16,
 )
 
@@ -107,7 +109,18 @@ assert (
     train_set.exists() and val_set.exists()
 ), f"Dataset not found. {dataset_dir} should contain 'train' and 'val' folders."
 
-train_dataset = DiscDataset(train_set, transform=transform, train=True)
+num_workers = dp.num_workers
+prefetch_factor = dp.prefetch_factor if num_workers > 0 else None
+
+train_dataset = DiscDataset(
+    train_set,
+    transform=transform,
+    train=True,
+    use_processed=mp.use_processed,
+    encoder_id=mp.encoder_id,
+    depth_model_id=mp.depth_model_id,
+    segmentation_model_id=mp.segmentation_model_id,
+)
 train_sampler = DistributedSampler(
     train_dataset,
     num_replicas=world_size,
@@ -117,13 +130,21 @@ train_sampler = DistributedSampler(
 train_loader = DataLoader(
     train_dataset,
     batch_size=dsp.batch_size,
-    prefetch_factor=dp.prefetch_factor,
-    num_workers=dp.num_workers,
+    prefetch_factor=prefetch_factor,
+    num_workers=num_workers,
     sampler=train_sampler,
     collate_fn=collate_fn,
 )
 
-val_dataset = DiscDataset(val_set, transform=transform, train=True)
+val_dataset = DiscDataset(
+    val_set,
+    transform=transform,
+    train=True,
+    use_processed=mp.use_processed,
+    encoder_id=mp.encoder_id,
+    depth_model_id=mp.depth_model_id,
+    segmentation_model_id=mp.segmentation_model_id,
+)
 val_sampler = DistributedSampler(
     val_dataset,
     num_replicas=world_size,
@@ -133,7 +154,8 @@ val_sampler = DistributedSampler(
 val_loader = DataLoader(
     val_dataset,
     batch_size=dsp.batch_size,
-    num_workers=dp.num_workers,
+    prefetch_factor=prefetch_factor,
+    num_workers=num_workers,
     sampler=val_sampler,
     collate_fn=collate_fn,
 )
@@ -201,6 +223,7 @@ dsp.config["scheduler"] = dict(
 
 ###################### Training ######################
 
+
 def initialize_model(model) -> Tuple[deepspeed.DeepSpeedEngine, Any]:
     model_engine, _, _, scheduler = deepspeed.initialize(
         config=OmegaConf.to_container(dsp.config, resolve=True),
@@ -208,6 +231,7 @@ def initialize_model(model) -> Tuple[deepspeed.DeepSpeedEngine, Any]:
     )
     model_engine: deepspeed.DeepSpeedEngine
     return model_engine, scheduler
+
 
 model.finetune_language(config.finetune_language)
 model_engine, scheduler = initialize_model(model)
@@ -232,7 +256,9 @@ with Profiler(profile=config.profile) as PROFILER:
                 # `batch` is a nested dict with keys: `pixel_values`, `aux_inputs`, `input_ids`, `attention_mask`
                 # `aux_inputs` is a list of nested dict
                 target_dtypes = [torch.float16, torch.float32, torch.float64]
-                inputs = container_to(batch, target_dtypes, device=device, dtype=torch.bfloat16)
+                inputs = container_to(
+                    batch, target_dtypes, device=device, dtype=torch.bfloat16
+                )
                 # `input_ids` and `attention_mask` should be long tensors
                 inputs["input_ids"] = inputs["input_ids"].to(torch.long)
                 inputs["attention_mask"] = inputs["attention_mask"].to(torch.long)
@@ -250,7 +276,7 @@ with Profiler(profile=config.profile) as PROFILER:
                         labels=labels,
                         vision_feature_select_strategy=mp.vision_feature_select_strategy,
                         use_cache=False,
-                        other_params={"ids": ids, **batch},
+                        # other_params={"ids": ids, **batch},
                     )
                 DEBUG.stamp()
 
@@ -286,11 +312,13 @@ with Profiler(profile=config.profile) as PROFILER:
 
                 dist.barrier()
                 if timer.timesup():
-                    model_engine.save_checkpoint(checkpoint_dir, exclude_frozen_parameters=True)
+                    model_engine.save_checkpoint(
+                        checkpoint_dir, exclude_frozen_parameters=True
+                    )
                     timer.reset()
 
         model_engine.eval()
-        
+
         val_bar = tqdm(val_loader)
         val_bar.set_description(f"[Val {epoch}/{dsp.epochs}]")
         # NOTE: Disabled since it requires re-initializing the model_engine
@@ -301,7 +329,9 @@ with Profiler(profile=config.profile) as PROFILER:
                     # `batch` is a nested dict with keys: `pixel_values`, `aux_inputs`, `input_ids`, `attention_mask`
                     # `aux_inputs` is a list of nested dict
                     target_dtypes = [torch.float16, torch.float32, torch.float64]
-                    inputs = container_to(batch, target_dtypes, device=device, dtype=torch.bfloat16)
+                    inputs = container_to(
+                        batch, target_dtypes, device=device, dtype=torch.bfloat16
+                    )
                     # `input_ids` and `attention_mask` should be long tensors
                     inputs["input_ids"] = inputs["input_ids"].to(torch.long)
                     inputs["attention_mask"] = inputs["attention_mask"].to(torch.long)
@@ -314,7 +344,6 @@ with Profiler(profile=config.profile) as PROFILER:
                         **inputs,
                         labels=labels,
                         vision_feature_select_strategy=mp.vision_feature_select_strategy,
-                        other_params={"ids": ids, **batch},
                     )
                     loss = outputs.loss
 
@@ -325,8 +354,9 @@ with Profiler(profile=config.profile) as PROFILER:
                     del outputs, loss, labels
 
         dist.barrier()
-        model_engine.save_checkpoint(checkpoint_dir, tag=f"{epoch}", exclude_frozen_parameters=True)
+        model_engine.save_checkpoint(
+            checkpoint_dir, tag=f"{epoch}", exclude_frozen_parameters=True
+        )
 
 if local_rank == 0:
     PROFILER.export(output_dir / "trace.json")
-

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -14,18 +15,8 @@ from transformers import (
 )
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 
-# try:
-#     from deepspeed.runtime.zero.stage3 import (
-#         estimate_zero3_model_states_mem_needs_all_live,
-#     )
-# except ImportError:
-#     print("DeepSpeed not installed")
-#     pass
-
-from pathlib import Path
-
 from src.arguments.dataclass import ModelParams
-from src.utils import default, container_cat, batch_feature_to_dict
+from src.utils import batch_feature_to_dict, container_cat, default
 
 from .encoder import (
     DepthEncoder,
@@ -35,6 +26,14 @@ from .encoder import (
 )
 from .utils import ensure_all_on_device, ensure_all_same_dtype
 from .vision_tower import VisionTower
+
+# try:
+#     from deepspeed.runtime.zero.stage3 import (
+#         estimate_zero3_model_states_mem_needs_all_live,
+#     )
+# except ImportError:
+#     print("DeepSpeed not installed")
+#     pass
 
 
 class LlavaPEFT(torch.nn.Module):
@@ -139,20 +138,23 @@ class LlavaPEFT(torch.nn.Module):
         for name, param in self.llava.named_parameters():
             param.requires_grad = "lora" in name
 
-    def transform(self, img: Image, prompt: str):
+    def transform(
+        self, img: Image, prompt: str, processed_images: Dict[str, Image] = None
+    ):
         inputs = self.processor(
             img,
             text=prompt,
             return_tensors="pt",  # return as pytorch tensors
             padding=True,
-            do_rescale=False,  # since we already rescale color range to [0, 1] when loading dataset
+            do_rescale=True,
         )
 
         image_inputs = self.vision_tower.processor(
             img,
+            processed_images=processed_images,
             return_tensors="pt",  # return as pytorch tensors
             padding=True,
-            do_rescale=False,  # since we already rescale color range to [0, 1] when loading dataset)
+            do_rescale=True,
         )
 
         inputs["pixel_values"] = image_inputs["pixel_values"]
@@ -172,15 +174,25 @@ class LlavaPEFT(torch.nn.Module):
             inputs["pixel_values"] = [pixel_values]
 
         if self.conditional_fuser:
-            language_embeds = self.llava.base_model.get_input_embeddings()(
-                inputs["input_ids"].to(torch.long)
-            )
+            # language_embeds = self.llava.base_model.get_input_embeddings()(
+            #     inputs["input_ids"].to(torch.long)
+            # )
+            # language_embeds = language_embeds.mean(dim=1)
+            lang_inputs = inputs.copy()
+            lang_inputs.pop("pixel_values")
 
-            language_embeds = language_embeds.mean(dim=1)
+            outputs = self.llava.base_model(**lang_inputs, output_hidden_states=True)
+            embeddings: torch.Tensor = outputs.hidden_states[-1]
+
+            attention_mask: torch.Tensor = inputs["attention_mask"]
+            mask_expanded = attention_mask.unsqueeze(-1).expand(embeddings.size())
+            sum_embeddings = torch.sum(embeddings * mask_expanded, dim=1)
+            sum_mask = torch.clamp(attention_mask.sum(dim=1).unsqueeze(-1), min=1e-9)
+            language_embeds = sum_embeddings / sum_mask
+
+            language_embeds = language_embeds.to(pixel_values.dtype)
             inputs["pixel_values"] = (inputs["pixel_values"], language_embeds)
 
-        if "other_params" in inputs:
-            del inputs["other_params"]
         return self.llava(**inputs)
 
     def merge_adapter(self):

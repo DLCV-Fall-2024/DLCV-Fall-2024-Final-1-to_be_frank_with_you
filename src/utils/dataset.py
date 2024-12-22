@@ -44,10 +44,10 @@ class DiscDataset(Dataset):
         use_trainer: bool = False,
         trainer_input_kwargs: Optional[dict] = None,
         cache_dir: Optional[str] = ".cache",
-        # use_cache_feature: bool = False,
-        # encoder_id: Optional[str] = None,
-        # depth_model_id: Optional[str] = None,
-        # segmentation_model_id: Optional[str] = None,
+        use_processed: bool = False,
+        encoder_id: Optional[str] = None,
+        depth_model_id: Optional[str] = None,
+        segmentation_model_id: Optional[str] = None,
     ):
         path = Path(path)
         img_dir = path / "images"
@@ -57,46 +57,48 @@ class DiscDataset(Dataset):
             img_dir.exists() and img_dir.is_dir()
         ), f"images directory not found in {path}"
 
-        # if use_cache_feature:
-        #     assert (
-        #         encoder_id is not None
-        #     ), "encoder_id is required when use_cache_feature is True"
-        #     assert (
-        #         depth_model_id is not None
-        #     ), "depth_model_id is required when use_cache_feature is True"
-        #     assert (
-        #         segmentation_model_id is not None
-        #     ), "segmentation_model_id is required when use_cache_feature is True"
+        # NOTE: Only segmentation is supported for now
+        self.processed_dir: Optional[Dict[str, Path]] = None
+        self.process_model_id: Optional[Dict[str, str]] = None
+        if use_processed:
+            # if encoder_id is not None:
+            #     encoder_id = encoder_id.replace("/", "_")
+            # if depth_model_id is not None:
+            #     depth_model_id = depth_model_id.replace("/", "_")
+            if segmentation_model_id is not None:
+                segmentation_model_id = segmentation_model_id.replace("/", "_")
 
-        #     cache_dir = path / "features"
-        #     default_feature_dir = cache_dir / "default" / encoder_id
-        #     depth_feature_dir = cache_dir / "depth" / depth_model_id
-        #     segmentation_feature_dir = (
-        #         cache_dir / "segmentation" / segmentation_model_id
-        #     )
+            cache_dir = path / "features"
+            # default_processed_dir = cache_dir / "default" / encoder_id
+            # depth_processed_dir = cache_dir / "depth" / depth_model_id
+            segmentation_processed_dir = (
+                cache_dir / "segmentation" / segmentation_model_id
+            )
 
-        #     assert (
-        #         default_feature_dir.exists()
-        #     ), f"default feature directory {default_feature_dir} not found"
-        #     assert (
-        #         depth_feature_dir.exists()
-        #     ), f"depth feature directory {depth_feature_dir} not found"
-        #     assert (
-        #         segmentation_feature_dir.exists()
-        #     ), f"segmentation feature directory {segmentation_feature_dir} not found"
+            # default_processed_enable = default_processed_dir.exists()
+            # depth_processed_enable = depth_processed_dir.exists()
+            segmentation_processed_enable = segmentation_processed_dir.exists()
 
-        #     # Check if config has features
-        #     with open(config_path, "r") as f:
-        #         config = cast(DiscDatasetConfig, DiscDatasetConfig.from_json(f.read()))
-        #     for item in config.data:
-        #         if item.features is None:
-        #             assert False, f"cache features not found for item {item.id}"
-        #         if item.features.get("default", {})[encoder_id] is None:
-        #             assert False, f"default feature not found for item {item.id}"
-        #         if item.features.get("depth", {})[depth_model_id] is None:
-        #             assert False, f"depth feature not found for item {item.id}"
-        #         if item.features.get("segmentation", {})[segmentation_model_id] is None:
-        #             assert False, f"segmentation feature not found for item {item.id}"
+            # Check if config has features
+            with open(config_path, "r") as f:
+                config = cast(DiscDatasetConfig, DiscDatasetConfig.from_json(f.read()))
+
+            # TODO: Reactivate this after the generation is donw
+            # for item in config.data:
+            #     if item.features is None:
+            #         assert False, f"processed images not found for item {item.id}"
+            #     # if default_processed_enable and item.features.get("default", {})[encoder_id] is None:
+            #     #     assert False, f"default processed image not found for item {item.id}"
+            #     # if depth_processed_enable and item.features.get("depth", {})[depth_model_id] is None:
+            #     #     assert False, f"depth processed image not found for item {item.id}"
+            #     if segmentation_processed_enable and item.features.get("segmentation", {})[segmentation_model_id] is None:
+            #         assert False, f"segmentation processed image not found for item {item.id}"
+            self.processed_dir = {}
+            self.process_model_id = {}
+
+            if segmentation_processed_enable:
+                self.processed_dir["segmentation"] = segmentation_processed_dir
+                self.process_model_id["segmentation"] = segmentation_model_id
 
         with open(config_path, "r") as f:
             config = cast(DiscDatasetConfig, DiscDatasetConfig.from_json(f.read()))
@@ -139,6 +141,20 @@ class DiscDataset(Dataset):
         if self.is_train:
             prompt = f"{prompt} {item.gt}"
 
+        image = PIL.Image.open(item.img_path).convert("RGB")
+
+        processed_images = {}
+        if self.processed_dir:
+            features = item.features
+            for key, dir in self.processed_dir.items():
+                # NOTE: We have processed image path in config file but not used here,
+                #       consider remove them in config file
+                model_id = self.process_model_id[key]
+                processed_image_path = features[key][model_id]
+                processed_images[key] = PIL.Image.open(processed_image_path).convert(
+                    "RGB"
+                )
+
         # if self.use_cache_feature:
         #     features = item.features
         #     default_feature_path = features["default"][self.encoder_id]
@@ -160,18 +176,22 @@ class DiscDataset(Dataset):
 
         #     return (item.id, inputs)
 
-        img = PIL.Image.open(item.img_path).convert("RGB")
-        if isinstance(self.transform, transforms.Compose):
-            transformed_img = self.transform(img)
-            inputs = {
-                "image": transformed_img,
-                "prompt": prompt,
-            }
-        else:
-            inputs = self.transform(img, prompt=prompt)
+        # NOTE: Currently, we directly use given transform for better performance
+        # if isinstance(self.transform, transforms.Compose):
+        #     transformed_img = self.transform(img)
+        #     inputs = {
+        #         "image": transformed_img,
+        #         "prompt": prompt,
+        #     }
+        # else:
+        #     inputs = self.transform(img, prompt=prompt)
+        # TODO: Pass processed images into transform
+        inputs = self.transform(image, processed_images=processed_images, prompt=prompt)
 
         # Otherwise, workers will open too many files
-        img.close()
+        image.close()
+        for processed_image in processed_images.values():
+            processed_image.close()
 
         # inputs["use_cache_feat"] = False
         # if self.cache_dir is not None:
@@ -346,7 +366,7 @@ from src.models.encoder.segmentation import SegmentationEncoder
 from functools import partial
 
 
-def setup_segmentation_model(
+def get_segmentaion_processor(
     model_id: str, device: str = "cuda", torch_dtype: torch.dtype = torch.bfloat16
 ):
     segmentation_encoder = SegmentationEncoder(
@@ -362,43 +382,44 @@ def setup_segmentation_model(
         p.requires_grad = False
     segmentation_encoder.eval()
 
-    processor = segmentation_encoder.task_processor
+    def processor(batch_img):
+        processed = segmentation_encoder.task_processor(
+            batch_img,
+            return_tensors="pt",  # return as pytorch tensors
+            padding=True,
+            do_rescale=True,
+        )
+        processed.to(device="cuda", dtype=torch.float16)
 
-    return segmentation_encoder, processor
+        output = segmentation_encoder(**processed)
+        preds = output["predictions"]
+        preds = preds.detach().cpu()  # [1, 3, 800, 1200]
+        # convert back to PIL
+        preds = [
+            PIL.Image.fromarray(pred.permute(1, 2, 0).to(torch.uint8).numpy())
+            for pred in preds
+        ]
 
+        return preds
 
-def process_output(output, vision_feature_layer: int = -2):
-    hidden_states = output.hidden_states
-    features = hidden_states[vision_feature_layer]
-    return features
+    return processor
 
-
-def process_depth_output(output, vision_feature_layer: int = -2):
-    raise NotImplementedError("Depth output processing not implemented")
-
-
-def process_segmentation_output(output, vision_feature_layer: int = -2):
-    raise NotImplementedError("Segmentation output processing not implemented")
-
-
-PROCESS_OUTPUT_FUNC = {
-    "default": process_output,
-    "depth": process_depth_output,
-    "segmentation": process_segmentation_output,
-}
 
 SETUP_MODEL_FUNC = {
-    "segmentation": setup_segmentation_model,
+    "segmentation": get_segmentaion_processor,
 }
 
 
+# NOTE: The is actually only for segmentation
 @app.command("extract_processed")
 def extract_processed_images(
     split: str = typer.Option("all", help="Split to preprocess"),
     cache_dir: str = typer.Option("./data", help="Cache directory"),
-    feature_name: str = typer.Option("default", help="Feature name"),
-    model_id: str = typer.Option("facebook/dinov2-large", help="Encoder id"),
-    batch_size: int = typer.Option(16, help="Batch size"),
+    feature_name: str = typer.Option("segmentation", help="Feature name"),
+    model_id: str = typer.Option(
+        "shi-labs/oneformer_ade20k_dinat_large", help="Encoder id"
+    ),
+    batch_size: int = typer.Option(6, help="Batch size"),
 ):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
@@ -453,32 +474,37 @@ def extract_processed_images(
             batch_name.append(img_name)
 
             if len(batch_index) == batch_size or i == len(data) - 1:
-                processed = processor(
-                    batch_img,
-                    return_tensors="pt",  # return as pytorch tensors
-                    padding=True,
-                    do_rescale=True,
-                )
-                processed.to(device="cuda", dtype=torch.float16)
+                # processed = processor(
+                #     batch_img,
+                #     return_tensors="pt",  # return as pytorch tensors
+                #     padding=True,
+                #     do_rescale=True,
+                # )
+                # processed.to(device="cuda", dtype=torch.float16)
 
-                output = model(**processed)
-                preds = output["predictions"]
-                preds = preds.detach().cpu()  # [1, 3, 800, 1200]
-                # convert back to PIL
-                preds = [
-                    PIL.Image.fromarray(pred.permute(1, 2, 0).to(torch.uint8).numpy())
-                    for pred in preds
-                ]
+                # output = model(**processed)
+                # preds = output["predictions"]
+                # preds = preds.detach().cpu()  # [1, 3, 800, 1200]
+                # # convert back to PIL
+                # preds = [
+                #     PIL.Image.fromarray(pred.permute(1, 2, 0).to(torch.uint8).numpy())
+                #     for pred in preds
+                # ]
+                processed_images = processor(batch_img)
 
-                for i, pred, name in zip(batch_index, preds, batch_name):
+                for i, processed_image, name in zip(
+                    batch_index, processed_images, batch_name
+                ):
                     processed_image_path = feature_dir / f"{name}.jpg"
-                    pred.save(processed_image_path)
+                    processed_image.save(processed_image_path)
 
                     if "features" not in data[i]:
                         data[i]["features"] = {}
                     if feature_name not in data[i]["features"]:
                         data[i]["features"][feature_name] = {}
-                    data[i]["features"][feature_name][model_name] = str(processed_image_path)
+                    data[i]["features"][feature_name][model_name] = str(
+                        processed_image_path
+                    )
 
                 batch_index = []
                 batch_img = []
@@ -487,9 +513,30 @@ def extract_processed_images(
                 for img in batch_img:
                     img.close()
 
-                del processed, output, preds
+                del processed_images, output, preds
 
         json.dump(config, open(config_path, "w"), indent=4)
+
+
+def process_output(output, vision_feature_layer: int = -2):
+    hidden_states = output.hidden_states
+    features = hidden_states[vision_feature_layer]
+    return features
+
+
+def process_depth_output(output, vision_feature_layer: int = -2):
+    raise NotImplementedError("Depth output processing not implemented")
+
+
+def process_segmentation_output(output, vision_feature_layer: int = -2):
+    raise NotImplementedError("Segmentation output processing not implemented")
+
+
+PROCESS_OUTPUT_FUNC = {
+    "default": process_output,
+    "depth": process_depth_output,
+    "segmentation": process_segmentation_output,
+}
 
 
 @app.command("extract")

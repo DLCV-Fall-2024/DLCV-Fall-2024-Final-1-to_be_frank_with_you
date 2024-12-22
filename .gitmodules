@@ -1,0 +1,9 @@
+[submodule "tools/Domain_Translation_Multi-weather_Restoration"]
+	path = tools/Domain_Translation_Multi-weather_Restoration
+	url = git@github.com:pwp1208/Domain_Translation_Multi-weather_Restoration.git
+[submodule "tools/LaKDNet"]
+	path = tools/LaKDNet
+	url = git@github.com:lingyanruan/LaKDNet.git
+[submodule "tools/DiffBIR"]
+	path = tools/DiffBIR
+	url = git@github.com:XPixelGroup/DiffBIR.git
