@@ -25,6 +25,7 @@ class SegmentationEncoder(VisionEncoder):
         model_id: Optional[str] = None,
         model: Optional[AutoModel] = None,
         processor: Optional[AutoImageProcessor] = None,
+        ignore_model: bool = False,
         segment_type: Optional[str] = "semantic",
         vision_feature_layer: Optional[int] = None,
         image_target_size: Optional[Tuple[int, int]] = None,
@@ -34,9 +35,16 @@ class SegmentationEncoder(VisionEncoder):
         **kwargs,
     ):
         if model_id is not None:
-            model = OneFormerForUniversalSegmentation.from_pretrained(
-                model_id, torch_dtype=torch_dtype
-            )
+            # NOTE: Ignore model is only set if processed images are used
+            if ignore_model:
+                model = object()
+            else:
+                model = OneFormerForUniversalSegmentation.from_pretrained(
+                    model_id, torch_dtype=torch_dtype
+                )
+                # WARNING: Not sure if this is necessary
+                model = model.to(device)
+
             image_processor: OneFormerImageProcessor = (
                 OneFormerImageProcessor.from_pretrained(
                     model_id, size=image_target_size, torch_dtype=torch_dtype
@@ -47,8 +55,6 @@ class SegmentationEncoder(VisionEncoder):
             )
             processor.image_processor = image_processor
 
-            # WARNING: Not sure if this is necessary
-            model = model.to(device)
             model_id = None
 
         super().__init__(model_id, model, processor, vision_feature_layer, **kwargs)

@@ -136,6 +136,7 @@ class VisionTower(torch.nn.Module):
                 model_params.segmentation_model_id,
                 model=vit,
                 processor=processor,
+                ignore_model=model_params.use_processed,
                 segment_type=segment_type,
                 image_target_size=(800, 1200),
                 vision_feature_layer=vision_feature_layer,

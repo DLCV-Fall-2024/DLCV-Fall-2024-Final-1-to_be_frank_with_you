@@ -275,7 +275,6 @@ def main():
                             labels=labels,
                             vision_feature_select_strategy=mp.vision_feature_select_strategy,
                             use_cache=False,
-                            # other_params={"ids": ids, **batch},
                         )
                     DEBUG.stamp()
 
