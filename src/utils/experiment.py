@@ -8,8 +8,8 @@ from omegaconf import OmegaConf
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 
 
-def create_assets(root: Path, exp_name: str) -> Tuple[Path, Path, Path]:
-    output_dir = root / "outputs" / exp_name
+def create_assets(root: Path, exp_name: str, timestamp: str) -> Tuple[Path, Path, Path]:
+    output_dir = root / "outputs" / exp_name / timestamp
     checkpoint_dir = output_dir / "checkpoint"
     log_dir = output_dir / "log"
 
@@ -26,18 +26,27 @@ C = TypeVar("C")
 def load_config(
     Config: Type[C],
     name: Optional[str] = None,
+    config_dir_prefix: Optional[str] = None,
+    return_config_path: bool = False,
     cli_args: Optional[Dict] = None,
     sync_fn: Callable[[], None] = None,
     auto_create: bool = False,
     external_defaults: Tuple[List[str], str] = [],
-) -> Tuple[Optional[C], str, Path, Path, Path]:
+) -> (
+    Tuple[Optional[C], str, Path, Path, Path, Path]
+    | Tuple[Optional[C], str, Path, Path, Path]
+):
     # Initialize default configuration
     default_config = OmegaConf.structured(Config)
     use_default_config = name is None
 
     if not use_default_config:
         configs_dir = ROOT_DIR / "configs"
+        if config_dir_prefix is not None:
+            configs_dir = configs_dir / config_dir_prefix
         config_path = configs_dir / f"{name}.yaml"
+
+        print(f"Config path: {config_path}")
 
         configs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -60,13 +69,13 @@ def load_config(
                 with config_path.open("w") as f:
                     OmegaConf.save(default_config, f)
 
-            return None, None, None, None, None
+            return None, None, None
 
         # Load user-modified configuration
         config = OmegaConf.load(config_path)
         config = OmegaConf.merge(default_config, config)
         config = OmegaConf.to_object(config)
-    
+
     else:
         config = OmegaConf.to_object(default_config)
         name = "DEFAULT"
@@ -77,9 +86,12 @@ def load_config(
 
     # Create experiment assets (folders and default configuration)
     timestamp = time.strftime("%m%d_%H%M%S")
-    output_dir, checkpoint_dir, log_dir = create_assets(ROOT_DIR, f"{name}_{timestamp}")
+    output_dir, checkpoint_dir, log_dir = create_assets(ROOT_DIR, name, timestamp)
 
-    return config, timestamp, output_dir, checkpoint_dir, log_dir
+    if return_config_path:
+        return config, timestamp, output_dir, checkpoint_dir, log_dir, config_path
+    else:
+        return config, timestamp, output_dir, checkpoint_dir, log_dir
 
 
 class CustomDumper(yaml.Dumper):

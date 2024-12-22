@@ -175,7 +175,9 @@ class DiscDataset(Dataset):
         image.close()
         for processed_image in processed_images.values():
             processed_image.close()
-
+        # for key in inputs.keys():
+        #     if isinstance(inputs[key], torch.Tensor):
+        #         inputs[key] = inputs[key].squeeze(0)
         return (item.id, inputs)
 
     def __trainer_getitem__(self, idx: int):
@@ -323,12 +325,12 @@ def preprocess_dataset(
         compress_config(save_dir / "config.json")
 
 
+from functools import partial
+
 import torch
 from transformers import AutoModel, AutoProcessor
 
-
 from src.models.encoder.segmentation import SegmentationEncoder
-from functools import partial
 
 
 def get_segmentaion_processor(

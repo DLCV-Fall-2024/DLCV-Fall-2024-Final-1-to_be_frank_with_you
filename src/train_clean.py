@@ -1,6 +1,6 @@
+import argparse
 import os
 import sys
-import argparse
 
 from src.arguments.dataclass import Config
 
@@ -23,36 +23,30 @@ config, timestamp, *assets = load_config(
     cli_args=Config().extract(args),
     auto_create=True,
 )
-output_dir, checkpoint_dir, log_dir = assets
 if config is None:
     print("Configuration created")
     sys.exit()
+    
+output_dir, checkpoint_dir, log_dir = assets
 
 import warnings
 from pathlib import Path
-from omegaconf import OmegaConf
-from tqdm import tqdm
 
 import torch
 from liger_kernel.transformers import apply_liger_kernel_to_llama
+from omegaconf import OmegaConf
 from pytorch_lightning import seed_everything
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 from transformers.utils import logging
 
 logging.set_verbosity_error()
 
 from src.models.llava import LlavaPEFT, collate_fn
-from src.utils import default
+from src.utils import container_to, default
 from src.utils.dataset import DiscDataset
-from src.utils import container_to
 from src.utils.experiment import dump_config
-from src.utils.log import (
-    PerformanceMonitor,
-    Timer,
-    init_logger,
-    init_wandb,
-    print_once,
-)
+from src.utils.log import PerformanceMonitor, Timer, init_logger, init_wandb, print_once
 
 addition_config = {}
 mp = config.model
@@ -208,7 +202,9 @@ for epoch in range(epochs):
             # `batch` is a nested dict with keys: `pixel_values`, `aux_inputs`, `input_ids`, `attention_mask`
             # `aux_inputs` is a list of nested dict
             target_dtypes = [torch.float16, torch.float32, torch.float64]
-            inputs = container_to(batch, target_dtypes, device=device, dtype=torch.bfloat16)
+            inputs = container_to(
+                batch, target_dtypes, device=device, dtype=torch.bfloat16
+            )
             # `input_ids` and `attention_mask` should be long tensors
             inputs["input_ids"] = inputs["input_ids"].to(torch.long)
             inputs["attention_mask"] = inputs["attention_mask"].to(torch.long)

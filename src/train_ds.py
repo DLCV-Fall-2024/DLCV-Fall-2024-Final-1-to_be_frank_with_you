@@ -39,10 +39,11 @@ config, timestamp, *assets = load_config(
     sync_fn=lambda: dist.barrier(),
     auto_create=local_rank == 0,
 )
-output_dir, checkpoint_dir, log_dir = assets
 if config is None:
     print("Configuration created")
     sys.exit()
+
+output_dir, checkpoint_dir, log_dir = assets
 
 import warnings
 from pathlib import Path

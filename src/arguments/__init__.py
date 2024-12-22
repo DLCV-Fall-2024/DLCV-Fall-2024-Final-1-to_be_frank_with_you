@@ -44,18 +44,22 @@ class ParamGroup:
             value = value if not fill_none else None
             if shorthand:
                 if t == bool:
-                    group.add_argument(
-                        "--" + key, ("-" + key[0:1]), default=value, action="store_true"
-                    )
+                    if not any(arg.dest == key for arg in group._actions):
+                        group.add_argument(
+                            "--" + key, ("-" + key[0:1]), default=value, action="store_true"
+                        )
                 else:
-                    group.add_argument(
-                        "--" + key, ("-" + key[0:1]), default=value, type=t
-                    )
+                    if not any(arg.dest == key for arg in group._actions):
+                        group.add_argument(
+                            "--" + key, ("-" + key[0:1]), default=value, type=t
+                        )
             else:
                 if t == bool:
-                    group.add_argument("--" + key, default=value, action="store_true")
+                    if not any(arg.dest == key for arg in group._actions):
+                        group.add_argument("--" + key, default=value, action="store_true")
                 else:
-                    group.add_argument("--" + key, default=value, type=t)
+                    if not any(arg.dest == key for arg in group._actions):
+                        group.add_argument("--" + key, default=value, type=t)
 
     # def extract(self, args):
     #     group = GroupParams()

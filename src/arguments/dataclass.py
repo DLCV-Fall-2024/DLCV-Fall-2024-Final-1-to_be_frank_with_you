@@ -144,6 +144,7 @@ class GenerateParams(ParamGroup):
     seed: int = 42
     batch_size: int = 4
     num_workers: int = 10
+    prefetch_factor: int = 20
     max_new_tokens: int = 1024
     generation_config: dict = field(
         default_factory=lambda: {
@@ -152,11 +153,13 @@ class GenerateParams(ParamGroup):
     )
     use_regex: bool = True
 
-    model_config: Config = field(default_factory=Config)
+    # model_config: Config = field(default_factory=Config)
+    model_config: Optional[Config] = None
     model_path: Optional[str] = None
 
     def load(self, parser: ArgumentParser, sentinel: bool = False):
         super().__init__(parser=parser, name="Generation Parameters", fill_none=sentinel)
 
     def extract(self, args):
-        return super().extract(args)
+        p = super().extract(args)
+        return p
