@@ -14,6 +14,7 @@ import sys
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
 from typing import List, Union, Optional, ClassVar, Any, Dict, Protocol
+from dataclasses import is_dataclass
 
 
 class Dataclass(Protocol):
@@ -39,6 +40,9 @@ class ParamGroup:
             group = parser.add_argument_group(name)
 
         for key, value in vars(self).items():
+            if isinstance(value, dict) or is_dataclass(value):
+                continue
+            
             shorthand = False
             if key.startswith("__"):
                 continue
@@ -84,6 +88,8 @@ class ParamGroup:
         group = {}
         self_vars = vars(self)
         for key, value in vars(args).items():
+            if value is None:
+                continue
             if key.startswith("no_") and isinstance(value, bool):
                 key = key[3:]
             if key in self_vars and value != self_vars[key]:

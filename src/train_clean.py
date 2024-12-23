@@ -15,7 +15,7 @@ def main():
     parser = argparse.ArgumentParser(description="Training Script")
     parser.add_argument("--name", type=str, help="Name of the config presets")
 
-    Config().load(parser)
+    Config().load(parser, sentinel=True)
     args = parser.parse_args()
 
     name = args.name
@@ -28,7 +28,7 @@ def main():
     if config is None:
         print("Configuration created")
         sys.exit()
-
+    
     output_dir, checkpoint_dir, log_dir = assets
 
     import warnings

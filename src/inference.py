@@ -31,7 +31,7 @@ def main():
         help="Path to the checkpoint file (relative to training_dir/checkpoint)",
     )
 
-    GenerateParams().load(parser)
+    GenerateParams().load(parser, sentinel=True)
     args = parser.parse_args()
 
     name = args.name
