@@ -71,7 +71,7 @@ def main(
         name=name,
         cli_args=GenerateParams().extract(args),
         auto_create=True,
-        config_dir_prefix="inference",
+        prefix="inference",
     )
     if infer_config is None:
         print("Configuration created")
@@ -150,7 +150,7 @@ def main(
     # OmegaConf.save(infer_config, str(output_dir / "config.yaml"))
 
     # ic = infer_config
-    
+
     import json
     import re
 
@@ -187,13 +187,14 @@ def main(
         torch_dtype=torch.bfloat16,
     )
     print("Loading model from checkpoint: ", model_path)
-    model.load_state_dict(
-        torch.load(
-            open(model_path, "rb"),
-            map_location=device,
-            weights_only=True,
-        )
-    )
+    ckpt = torch.load(open(model_path, "rb"), map_location=device)
+    if "ds_version" in ckpt.keys():
+        print("Loading DeepSpeed checkpoint")
+        model.load_state_dict(ckpt["module"])
+    else:
+        # TODO: Make sure this is correct
+        print("Loading normal checkpoint")
+        model.load_state_dict(ckpt)
     print("Model loaded successfully")
 
     transform = model.transform
