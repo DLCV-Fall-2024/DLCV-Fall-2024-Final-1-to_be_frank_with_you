@@ -1,46 +1,23 @@
+import argparse
 import os
 import sys
-import argparse
-
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 # NOTE: (Tom) So I guess config_file is the config we used to train the model we're loading for inference
-def main(
-    # model_path: str = typer.Argument(
-    #     ...,
-    #     help="Path to the model checkpoint.",
-    # ),
-    # ## TODO: We should improve the mechanism to auto find and load the model configuration file
-    # config_file: str = typer.Argument(..., help="Path to the configuration file"),
-    # output_dir: str = typer.Option(
-    #     "results", help="Directory to save the results", show_default=True
-    # ),
-    # infer_config_path: str = typer.Option(
-    #     "configs/inference/default.yaml", help="Path to the generation config file."
-    # ),
-):
+def main():
     from pathlib import Path
 
-    from omegaconf import OmegaConf
-
-    from src.arguments.dataclass import GenerateParams, Config
-    from src.utils.experiment import load_config, dump_config
-    from src.utils import container_to, default
+    from src.arguments.dataclass import Config, GenerateParams
+    from src.utils import container_to, default, extract_args, load_dataclass
+    from src.utils.experiment import dump_config, load_config
 
     # Argument parsing
     parser = argparse.ArgumentParser(description="DeepSpeed Training Script")
     parser.add_argument(
         "--name", required=True, type=str, help="Name of the config presets"
     )
-    # NOTE: (Tom) Keep for now, in case I'm wrong
-    # parser.add_argument(
-    #     "--model_config_path",
-    #     required=False,
-    #     type=str,
-    #     help="Path to the model config file",
-    # )
     parser.add_argument(
         "--training_dir",
         required=True,
@@ -57,30 +34,23 @@ def main(
     GenerateParams().load(parser)
     args = parser.parse_args()
 
-    # config_path = Path(config_file)
-    # config_name = config_path.stem
-    # config, timestamp, _, _, _ = load_config(
-    #     Config, name=config_name, auto_create=False
-    # )
-    # if config is None:
-    #     raise FileNotFoundError("Configuration not found. Please create one.")
-
     name = args.name
     infer_config, _, *assets = load_config(
         GenerateParams,
         name=name,
-        cli_args=GenerateParams().extract(args),
+        cli_args=args,
         auto_create=True,
         prefix="inference",
+        return_config_path=True,
     )
     if infer_config is None:
         print("Configuration created")
         sys.exit()
 
-    output_dir, checkpoint_dir, log_dir = assets
-    print(f"Output dir: {output_dir}")
-    print(f"Checkpoint dir: {checkpoint_dir}")
-    print(f"Log dir: {log_dir}")
+    output_dir, checkpoint_dir, log_dir, infer_config_path = assets
+    print(f"Output dir: {output_dir.relative_to(Path.cwd())}")
+    print(f"Checkpoint dir: {checkpoint_dir.relative_to(Path.cwd())}")
+    print(f"Log dir: {log_dir.relative_to(Path.cwd())}")
 
     ## Load train config and merge with inference config
     training_dir = Path(args.training_dir)
@@ -94,62 +64,14 @@ def main(
     assert model_path.exists(), f"Checkpoint not found at {model_path}"
     infer_config.model_path = str(model_path)
 
-    # train_config_dict = OmegaConf.load(train_config_path)
-    # train_config_dict = OmegaConf.to_container(train_config_dict)
-
-    # config_dict = OmegaConf.to_container(infer_config)
-    # config_dict["model_config"] = train_config_dict
-
-    # WARNING: (Tom) If current Config is different to the one used to train the model, this will cause issues
-    train_config = OmegaConf.load(train_config_path)
-    train_config = OmegaConf.structured(Config, train_config)
-    train_config: Config = OmegaConf.to_object(train_config)
-
-    infer_config: GenerateParams = OmegaConf.to_object(infer_config)
+    train_config = load_dataclass(Config, train_config_path, strict=False)
+    train_config = extract_args(train_config, args)
     infer_config.model_config = train_config
+
     dump_config(infer_config, output_dir / "config.yaml")
+    dump_config(infer_config, infer_config_path)
 
     ic = infer_config
-
-    # NOTE: (Tom) Keep for now, in case I'm wrong
-    # model_config_path = getattr(args, "model_config_path", None)
-    # if model_config_path is not None:
-    #     model_config_path = Path(model_config_path)
-    #     assert (
-    #         model_config_path.exists()
-    #     ), f"Model config not found at {model_config_path}"
-
-    #     model_config_dict = OmegaConf.load(model_config_path)
-    #     model_config_dict = OmegaConf.to_container(model_config_dict)
-
-    #     config_dict = OmegaConf.to_container(config)
-    #     config_dict["model_config"] = model_config_dict
-    #     dump_config(config_dict, output_dir / "config.yaml")
-
-    # model_path: Path = Path(model_path)
-    # assert model_path.exists(), f"Model checkpoint not found at {model_path}"
-
-    # output_dir: Path = Path(output_dir)
-    # infer_config_path: Path = Path(infer_config_path)
-
-    # infer_config_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # output_dir = output_dir / config_name / timestamp
-    # output_dir.mkdir(parents=True, exist_ok=True)
-
-    # infer_config: GenerateParams = OmegaConf.structured(GenerateParams)
-
-    # if not infer_config_path.exists():
-    #     OmegaConf.save(infer_config, infer_config_path)
-    # else:
-    #     infer_config: GenerateParams = OmegaConf.load(infer_config_path)
-    # infer_config.config_path = str(config_path)
-    # infer_config.output_dir = str(output_dir)
-    # infer_config.model_path = str(model_path)
-    # infer_config.model_config = config
-    # OmegaConf.save(infer_config, str(output_dir / "config.yaml"))
-
-    # ic = infer_config
 
     import json
     import re
@@ -220,7 +142,7 @@ def main(
     )
     inference_loader = DataLoader(
         dataset,
-        batch_size=ic.batch_size,  # max for 20GB GPU
+        batch_size=ic.batch_size,
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
         collate_fn=collate_fn,

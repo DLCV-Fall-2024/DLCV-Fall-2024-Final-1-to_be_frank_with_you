@@ -13,7 +13,13 @@ import os
 import sys
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
-from typing import List, Union, Optional
+from typing import List, Union, Optional, ClassVar, Any, Dict, Protocol
+
+
+class Dataclass(Protocol):
+    # as already noted in comments, checking for this attribute is currently
+    # the most reliable way to ascertain that something is a dataclass
+    __dataclass_fields__: ClassVar[Dict[str, Any]] 
 
 
 class GroupParams:
@@ -48,6 +54,9 @@ class ParamGroup:
                         group.add_argument(
                             "--" + key, ("-" + key[0:1]), default=value, action="store_true"
                         )
+                        group.add_argument(
+                            "--no_" + key, dest=key, action="store_false"
+                        )
                 else:
                     if not any(arg.dest == key for arg in group._actions):
                         group.add_argument(
@@ -57,6 +66,9 @@ class ParamGroup:
                 if t == bool:
                     if not any(arg.dest == key for arg in group._actions):
                         group.add_argument("--" + key, default=value, action="store_true")
+                        group.add_argument(
+                            "--no_" + key, dest=key, action="store_false"
+                        )
                 else:
                     if not any(arg.dest == key for arg in group._actions):
                         group.add_argument("--" + key, default=value, type=t)
@@ -72,9 +84,15 @@ class ParamGroup:
         group = {}
         self_vars = vars(self)
         for key, value in vars(args).items():
+            if key.startswith("no_") and isinstance(value, bool):
+                key = key[3:]
             if key in self_vars and value != self_vars[key]:
                 group[key] = value
         return group
+    
+
+class DataclassInstanceAndParamGroup(Dataclass, ParamGroup):
+    pass
 
 
 class ModelParams(ParamGroup):

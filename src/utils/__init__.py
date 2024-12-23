@@ -1,8 +1,14 @@
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, TypeVar, Type, cast
 
 import torch
+from omegaconf.dictconfig import DictConfig
+from omegaconf import OmegaConf
 from transformers.feature_extraction_utils import BatchFeature
 from copy import deepcopy
+from dataclasses import is_dataclass
+from argparse import Namespace
+
+from src.arguments import DataclassInstanceAndParamGroup, Dataclass
 
 
 def default(val, default_val):
@@ -10,7 +16,12 @@ def default(val, default_val):
 
 
 # Call `to` for tensors in List or Dict recursively
-def container_to(container, target_dtypes: List[torch.dtype] = [], device: torch.device = None, dtype: torch.dtype = None):
+def container_to(
+    container,
+    target_dtypes: List[torch.dtype] = [],
+    device: torch.device = None,
+    dtype: torch.dtype = None,
+):
     if isinstance(container, torch.Tensor):
         if container.dtype in target_dtypes:
             return container.to(device=device, dtype=dtype)
@@ -18,7 +29,8 @@ def container_to(container, target_dtypes: List[torch.dtype] = [], device: torch
             return container.to(device=device)
     elif isinstance(container, (list, tuple)):
         return type(container)(
-            container_to(item, target_dtypes, device=device, dtype=dtype) for item in container
+            container_to(item, target_dtypes, device=device, dtype=dtype)
+            for item in container
         )
     elif isinstance(container, dict):
         return {
@@ -47,9 +59,9 @@ def iterate_container(container: Dict | List | Tuple | torch.Tensor | Any):
 def container_cat(containers: List[Dict | List | Tuple | torch.Tensor], dim: int = 0):
     if isinstance(containers[0], torch.Tensor):
         return torch.cat(containers, dim=dim)
-    
+
     cated = deepcopy(containers[0])
-    
+
     iters = [iterate_container(container) for container in containers]
     while True:
         iter_values = [next(iter, (None, [])) for iter in iters]
@@ -76,3 +88,66 @@ def batch_feature_to_dict(
         return type(container)(batch_feature_to_dict(item) for item in container)
     else:
         return container
+
+
+def convert_to_dict(config: DictConfig | Dataclass) -> Dict:
+    if isinstance(config, Dict):
+        return config
+    elif isinstance(config, DictConfig):
+        return OmegaConf.to_container(config, resolve=True)
+    elif is_dataclass(config):
+        return OmegaConf.to_container(OmegaConf.create(config), resolve=True)
+
+    raise ValueError(f"Unsupported config type: {type(config)}")
+
+
+def is_container(config: Any) -> bool:
+    return isinstance(config, DictConfig) or is_dataclass(config)
+
+
+def merge_config(
+    config: DictConfig | Dataclass,
+    additional: Dict | DictConfig | Dataclass,
+) -> Dataclass:
+    if isinstance(config, DictConfig):
+        config: Dataclass = OmegaConf.to_object(config)
+
+    additional: Dict = convert_to_dict(additional)
+
+    config_vars = vars(config)
+    for key, value in additional.items():
+        if key not in config_vars:
+            continue
+
+        config_value = config_vars[key]
+        if is_container(config_value):
+            config.__dict__[key] = merge_config(config_value, value)
+        else:
+            config.__dict__[key] = value
+
+    return config
+
+
+C = TypeVar("C", bound=DataclassInstanceAndParamGroup)
+
+
+def load_dataclass(Config: Type[C], config_path: str, strict: bool = True) -> C:
+    default_config = Config()
+    if strict:
+        config = OmegaConf.load(config_path)
+        config = OmegaConf.merge(default_config, config)
+        config: C = OmegaConf.to_object(config)
+    else:
+        config = OmegaConf.load(config_path)
+        config: C = merge_config(default_config, config)
+
+    return config
+
+
+def extract_args(config: C, args: Namespace) -> C:
+    config = OmegaConf.merge(config, config.extract(args))
+    return OmegaConf.to_object(config)
+
+
+def dataclass_to_dict(config: Dataclass) -> Dict:
+    return OmegaConf.to_container(OmegaConf.create(config), resolve=True)

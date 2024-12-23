@@ -1,15 +1,20 @@
 import time
+from argparse import Namespace
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type, TypeVar, cast
+from typing import Any, Callable, List, Optional, Tuple, Type, TypeVar
 
 import yaml
 from omegaconf import OmegaConf
+from src.utils import extract_args, load_dataclass
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 
 
-def create_assets(root: Path, exp_name: str, timestamp: str) -> Tuple[Path, Path, Path]:
-    output_dir = root / "outputs" / exp_name / timestamp
+def create_assets(root: Path, exp_name: str, timestamp: str, prefix: Optional[str] = None) -> Tuple[Path, Path, Path]:
+    output_dir = root / "outputs"
+    if prefix is not None:
+        output_dir = output_dir / prefix
+    output_dir = output_dir / exp_name / timestamp
     checkpoint_dir = output_dir / "checkpoint"
     log_dir = output_dir / "log"
 
@@ -26,9 +31,9 @@ C = TypeVar("C")
 def load_config(
     Config: Type[C],
     name: Optional[str] = None,
-    config_dir_prefix: Optional[str] = None,
+    prefix: Optional[str] = None,
     return_config_path: bool = False,
-    cli_args: Optional[Dict] = None,
+    cli_args: Optional[Namespace] = None,
     sync_fn: Callable[[], None] = None,
     auto_create: bool = False,
     external_defaults: Tuple[List[str], str] = [],
@@ -37,13 +42,13 @@ def load_config(
     | Tuple[Optional[C], str, Path, Path, Path]
 ):
     # Initialize default configuration
-    default_config = OmegaConf.structured(Config)
+    default_config = Config()
     use_default_config = name is None
 
     if not use_default_config:
         configs_dir = ROOT_DIR / "configs"
-        if config_dir_prefix is not None:
-            configs_dir = configs_dir / config_dir_prefix
+        if prefix is not None:
+            configs_dir = configs_dir / prefix
         config_path = configs_dir / f"{name}.yaml"
 
         print(f"Config path: {config_path}")
@@ -61,10 +66,10 @@ def load_config(
                     )
                     target = default_config
                     for key in keys[:-1]:
-                        if key not in target:
-                            target[key] = {}
-                        target = target[key]
-                    target[keys[-1]] = external_config
+                        if key not in target.__dict__:
+                            target.__dict__[key] = {}
+                        target = target.__dict__[key]
+                    target.__dict__[keys[-1]] = external_config
 
                 with config_path.open("w") as f:
                     OmegaConf.save(default_config, f)
@@ -72,21 +77,17 @@ def load_config(
             return None, None, None
 
         # Load user-modified configuration
-        config = OmegaConf.load(config_path)
-        config = OmegaConf.merge(default_config, config)
-        config = OmegaConf.to_object(config)
-
+        config = load_dataclass(Config, config_path)
     else:
         config = OmegaConf.to_object(default_config)
         name = "DEFAULT"
 
     if cli_args is not None:
-        config = OmegaConf.merge(config, cli_args)
-    config = cast(Config, config)
+        config = extract_args(config, cli_args)
 
     # Create experiment assets (folders and default configuration)
     timestamp = time.strftime("%m%d_%H%M%S")
-    output_dir, checkpoint_dir, log_dir = create_assets(ROOT_DIR, name, timestamp)
+    output_dir, checkpoint_dir, log_dir = create_assets(ROOT_DIR, name, timestamp, prefix)
 
     if return_config_path:
         return config, timestamp, output_dir, checkpoint_dir, log_dir, config_path

@@ -13,10 +13,10 @@ class ModelParams(ParamGroup):
     share_vit: bool = False
     use_processed: bool = True
 
-    use_depth: bool = False
+    use_depth: bool = True
     depth_model_id: str = "depth-anything/Depth-Anything-V2-Small-hf"
-
-    use_segmentation: bool = False
+    
+    use_segmentation: bool = True
     segmentation_model_id: str = "shi-labs/oneformer_ade20k_dinat_large"
 
     fuser_id: str = "gemini"
@@ -30,13 +30,14 @@ class ModelParams(ParamGroup):
             "auxiliary_projectors",
         ]
     )
-
+    
     vision_feature_select_strategy: str = "full"  # "default" or "full"
     gradient_checkpointing: bool = True
     lora_config: dict = field(
         default_factory=lambda: {
-            "r": 16,
-            "lora_alpha": 32,
+            "r": 256,
+            "lora_alpha": 16,
+            "use_rslora": True,  # sets the adapter scaling factor to `lora_alpha/math.sqrt(r)`
             "target_modules": [
                 "q_proj",
                 "v_proj",
@@ -44,7 +45,7 @@ class ModelParams(ParamGroup):
                 "multi_modal_projector.linear_2",
             ],
             "exclude_modules": "vision_tower.*",
-            "lora_dropout": 0.1,
+            "lora_dropout": 0.3,
             "use_dora": True,
             "bias": "none",
             "task_type": "CAUSAL_LM",

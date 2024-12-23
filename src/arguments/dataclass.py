@@ -33,7 +33,7 @@ class ModelParams(ParamGroup):
             "auxiliary_projectors",
         ]
     )
-    patch_size: int = 14
+    
     vision_feature_select_strategy: str = "full"  # "default" or "full"
     gradient_checkpointing: bool = True
     lora_config: dict = field(
@@ -153,13 +153,14 @@ class GenerateParams(ParamGroup):
     )
     use_regex: bool = True
 
-    # model_config: Config = field(default_factory=Config)
-    model_config: Optional[Config] = None
     model_path: Optional[str] = None
+    model_config: Config = field(default_factory=Config)
 
     def load(self, parser: ArgumentParser, sentinel: bool = False):
         super().__init__(parser=parser, name="Generation Parameters", fill_none=sentinel)
+        self.model_config.load(parser, sentinel)
 
     def extract(self, args):
         p = super().extract(args)
+        p["model_config"] = self.model_config.extract(args)
         return p

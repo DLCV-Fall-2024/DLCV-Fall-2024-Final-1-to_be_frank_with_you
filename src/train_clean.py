@@ -22,7 +22,7 @@ def main():
     config, timestamp, *assets = load_config(
         Config,
         name=name,
-        cli_args=Config().extract(args),
+        cli_args=args,
         auto_create=True,
     )
     if config is None:
@@ -45,7 +45,7 @@ def main():
     logging.set_verbosity_error()
 
     from src.models.llava import LlavaPEFT, collate_fn
-    from src.utils import container_to, default
+    from src.utils import container_to, default, dataclass_to_dict
     from src.utils.dataset import DiscDataset
     from src.utils.experiment import dump_config
     from src.utils.log import (
@@ -182,7 +182,7 @@ def main():
         init_wandb(
             project_name,
             run_name,
-            config=OmegaConf.to_container(config, resolve=True),
+            config=dataclass_to_dict(config),
             log_dir=log_dir,
             local_rank=local_rank if __USE_DEEPSPEED__ else None,
             entity="DLCV-Final",

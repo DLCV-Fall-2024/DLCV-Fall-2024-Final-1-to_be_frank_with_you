@@ -5,6 +5,7 @@ import argparse
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+
 def main():
     # Load configuration from preset and CLI arguments
     from src.utils.experiment import load_config
@@ -34,7 +35,7 @@ def main():
     config, timestamp, *assets = load_config(
         Config,
         name=name,
-        cli_args=Config().extract(args),
+        cli_args=args,
         external_defaults=[(["deepspeed", "config"], "deepspeed_default")],
         sync_fn=lambda: dist.barrier(),
         auto_create=local_rank == 0,
@@ -47,7 +48,6 @@ def main():
 
     import warnings
     from pathlib import Path
-    from omegaconf import OmegaConf
     from tqdm import tqdm
 
     import torch
@@ -60,21 +60,14 @@ def main():
     from src.utils.experiment import dump_config
     from src.utils import container_to, default
     from src.utils.dataset import DiscDataset
-    from src.utils.log import (
-        PerformanceMonitor,
-        Timer,
-        Profiler,
-        # init_logger,
-        # init_wandb,
-        print_once,
-    )
+    from src.utils.log import PerformanceMonitor, Timer, Profiler, print_once
 
     addition_config = {}
     mp = config.model
     dp = config.dataset
     dsp = config.deepspeed
 
-    seed_everything(config.seed)
+    seed_everything(config.seed)    
 
     if config.liger_kernel:
         apply_liger_kernel_to_llama()
@@ -83,9 +76,10 @@ def main():
         model_params=mp,
         gradient_checkpointing=True,
         lora_config=mp.lora_config,
-        # device=device,
         torch_dtype=torch.bfloat16,
     )
+    # TODO: Use zero3's reduction instead
+    dsp.config.pop("zero_optimization")
 
     addition_config["model_struct"] = model.get_model_struct()
 
@@ -164,7 +158,9 @@ def main():
     if config.wandb:
         team = "DLCV-Final"
         project = default(config.project_name, "DLCV-FINAL-Traffic-LLaVA")
-        group = default(config.run_name, f"{name}-{mp.model_id.split('/')[-1]}-{timestamp}")
+        group = default(
+            config.run_name, f"{name}-{mp.model_id.split('/')[-1]}-{timestamp}"
+        )
         dsp.config["wandb"] = dict(
             enabled=True,
             team=team,
@@ -175,7 +171,7 @@ def main():
     # logger = init_logger(local_rank=local_rank)
     # print(type(logger))
 
-    timer = Timer(10 * 60)  # 10 minutes
+    timer = Timer(30 * 60)  # 30 minutes
     DEBUG = PerformanceMonitor(config.debug)
     global_step = 0
 
@@ -222,15 +218,13 @@ def main():
 
     ###################### Training ######################
 
-
     def initialize_model(model) -> Tuple[deepspeed.DeepSpeedEngine, Any]:
         model_engine, _, _, scheduler = deepspeed.initialize(
-            config=OmegaConf.to_container(dsp.config, resolve=True),
+            config=dsp.config,
             model=model,
         )
         model_engine: deepspeed.DeepSpeedEngine
         return model_engine, scheduler
-
 
     model.finetune_language(config.finetune_language)
     model_engine, scheduler = initialize_model(model)
@@ -332,7 +326,9 @@ def main():
                         )
                         # `input_ids` and `attention_mask` should be long tensors
                         inputs["input_ids"] = inputs["input_ids"].to(torch.long)
-                        inputs["attention_mask"] = inputs["attention_mask"].to(torch.long)
+                        inputs["attention_mask"] = inputs["attention_mask"].to(
+                            torch.long
+                        )
                         labels = inputs["input_ids"].clone()
 
                         DEBUG.stamp()
