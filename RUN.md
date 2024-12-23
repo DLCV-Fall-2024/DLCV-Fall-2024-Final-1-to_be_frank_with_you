@@ -60,8 +60,18 @@ python -m src.train_clean <CONFIG_FLAGS>
 deepspeed --module src.train_ds <CONFIG_FLAGS>
 ```
 
-> You can use `--name <PRESET_NAME>` to load a configuration preset from YAML file.
-> The scripts will create a preset file with default settings in configs/<RUN_NAME>.yaml and exit for the first time.
+- You can use `--name <PRESET_NAME>` to load a configuration preset from YAML file.
+- The scripts will create a preset file with default settings in configs/<PRESET_NAME>.yaml and exit for the first time.
+
+# Run Inference Code
+
+```bash
+python -m src.inference --name <PRESET_NAME> --training_dir <TRAINING_OUTPUT_DIR> --ckpt_path <CHECKPOINT_PATH> <CONFIG_FLAGS>
+```
+
+- You need to provide the training output directory for checkpoint loading.
+- Note that `ckpt_path` is **relative** to `training_dir`.
+- The scripts will create a preset file with default settings in `configs/inference/<PRESET_NAME>.yaml` and exit for the first time.
 
 ### Assets Structure
 
