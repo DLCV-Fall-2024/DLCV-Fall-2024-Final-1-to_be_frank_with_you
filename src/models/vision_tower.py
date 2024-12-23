@@ -2,6 +2,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers import BaseImageProcessor
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 
@@ -24,15 +25,18 @@ class MergedImageProcessor(BaseImageProcessor):
 
     def __init__(
         self,
-        processors: List[BaseImageProcessor],
+        clip_processor: BaseImageProcessor,
+        encoder_processor: BaseImageProcessor,
+        auxiliary_processors: List[BaseImageProcessor],
         encoder_index: Dict[str, int],
         torch_dtype: torch.dtype = torch.bfloat16,
         device: torch.device = torch.device("cpu"),
     ):
         super().__init__()
 
-        self.processors = processors
-        self.n_processors = len(processors)
+        self.clip_processor = clip_processor
+        self.encoder_processor = encoder_processor
+        self.auxiliary_processors = auxiliary_processors
         self.encoder_index = encoder_index
 
         self.device = device
@@ -48,16 +52,19 @@ class MergedImageProcessor(BaseImageProcessor):
         for key, img in processed_images.items():
             processed_image_encoder_index.append(self.encoder_index[key])
             processed_image_encoder_index_map[self.encoder_index[key]] = key
-        
-        inputs = self.processors[0](images, **kwargs)
+
+        clip_inputs = self.clip_processor(images, **kwargs)
+        inputs = self.encoder_processor(images, **kwargs)
         auxiliary_inputs = []
-        for i, processor in enumerate(self.processors[1:]):
-            index = i + 1
+
+        for i, processor in enumerate(self.auxiliary_processors):
             # If current encoder is given a processed image, use the processed image
-            if index in processed_image_encoder_index:
+            if i in processed_image_encoder_index:
                 # NOTE: We use the default processor for processed images for now
-                encoder_name = processed_image_encoder_index_map[index]
-                aux_inputs = self.processors[0](processed_images[encoder_name], **kwargs)
+                encoder_name = processed_image_encoder_index_map[i]
+                aux_inputs = self.encoder_processor(
+                    processed_images[encoder_name], **kwargs
+                )
                 aux_inputs["use_processed"] = True
             else:
                 aux_inputs = processor(images, **kwargs)
@@ -65,6 +72,7 @@ class MergedImageProcessor(BaseImageProcessor):
 
             auxiliary_inputs.append(aux_inputs)
 
+        inputs["clip_inputs"] = clip_inputs
         inputs["aux_inputs"] = auxiliary_inputs
 
         return inputs
@@ -75,7 +83,8 @@ class VisionTower(torch.nn.Module):
     def __init__(
         self,
         model_params: ModelParams,
-        vision_feature_layer: int,
+        clip_encoder: VisionEncoder,
+        vision_feature_layer: int = -2,
         language_embeds_dim: int = 768,
         segment_type: str = "semantic",  # ["semantic", "instance", "panoptic"]
         torch_dtype: torch.dtype = torch.bfloat16,
@@ -84,18 +93,32 @@ class VisionTower(torch.nn.Module):
     ):
         super().__init__()
 
+        self.clip_encoder = clip_encoder
+        # Get the feature dimension of the clip encoder
+        image_size = self.clip_encoder.processor.crop_size
+        patch_size = self.clip_encoder.model.config.patch_size
+        self.clip_patch_width = image_size["width"] // patch_size
+        self.clip_patch_height = image_size["height"] // patch_size
+        self.clip_feature_dim = self.clip_encoder.model.config.hidden_size
+
         self.encoder = VisionEncoder(model_params.encoder_id)
-        self.processors = [self.encoder.processor]
+        # Get the feature dimension of the encoder
+        image_size = self.encoder.processor.crop_size
+        patch_size = self.encoder.model.config.patch_size
+        self.encoder_patch_width = image_size["width"] // patch_size
+        self.encoder_patch_height = image_size["height"] // patch_size
+        self.encoder_feature_dim = self.encoder.model.config.hidden_size
+
+        # NOTE: We may add projector if the feature dimension is different
+        assert (
+            self.clip_feature_dim == self.encoder_feature_dim
+        ), "The feature dimension of the clip encoder and the encoder must be the same, but got {} and {}".format(
+            self.clip_feature_dim, self.encoder_feature_dim
+        )
+
+        self.auxiliary_processors = []
         self.vision_feature_layer = vision_feature_layer
-
         self.cache_postfix: List[str] = ["rgb"]  ## The key defined in dataset.py
-
-        vit = None
-        processor = None
-        if model_params.share_vit:
-            # Use the same vit and processor for all auxiliary encoders
-            vit = self.encoder.model
-            processor = self.encoder.processor
 
         self.auxiliary_encoders = torch.nn.ModuleList()
         self.auxiliary_projectors = torch.nn.ModuleList()
@@ -103,12 +126,10 @@ class VisionTower(torch.nn.Module):
 
         self.use_depth = model_params.use_depth
         if model_params.use_depth:
-            self.encoder_index["depth"] = len(self.processors)
+            self.encoder_index["depth"] = len(self.auxiliary_processors)
 
             depth_encoder = DepthEncoder(
                 model_params.depth_model_id,
-                vit,
-                processor,
                 vision_feature_layer,
                 device=device,
                 torch_dtype=torch_dtype,
@@ -122,20 +143,17 @@ class VisionTower(torch.nn.Module):
                     dtype=torch_dtype,
                 )
             )
-            self.processors.append(
-                self.processors[0]
+            self.auxiliary_processors.append(
+                self.encoder.processor
             )  # Use the main processor for depth encoder
             self.cache_postfix.append("depth")
 
-
         self.use_segmentation = model_params.use_segmentation
         if model_params.use_segmentation:
-            self.encoder_index["segmentation"] = len(self.processors)
+            self.encoder_index["segmentation"] = len(self.auxiliary_processors)
 
             segmentation_encoder = SegmentationEncoder(
                 model_params.segmentation_model_id,
-                model=vit,
-                processor=processor,
                 ignore_model=model_params.use_processed,
                 segment_type=segment_type,
                 image_target_size=(800, 1200),
@@ -146,7 +164,7 @@ class VisionTower(torch.nn.Module):
             self.auxiliary_encoders.append(segmentation_encoder)
             # No projection for segmentation encoder
             self.auxiliary_projectors.append(nn.Identity())
-            self.processors.append(segmentation_encoder.task_processor)
+            self.auxiliary_processors.append(segmentation_encoder.task_processor)
             self.cache_postfix.append("seg")
 
         self.n_auxiliary_features = len(self.auxiliary_encoders)
@@ -168,41 +186,78 @@ class VisionTower(torch.nn.Module):
 
         # Create merged image processor
         self.processor = MergedImageProcessor(
-            self.processors, 
+            self.clip_encoder.processor,
+            self.encoder.processor,
+            self.auxiliary_processors,
             encoder_index=self.encoder_index,
-            torch_dtype=torch_dtype, device=device
+            torch_dtype=torch_dtype,
+            device=device,
         )
         self.cache_dir = cache_dir
 
-    def forward(self, pixel_values: Union[torch.Tensor, Dict], **kwargs):
+    def forward(self, inputs, **kwargs):
         language_embeds = None
         if self.conditional_fuser:
-            pixel_values, language_embeds = pixel_values
+            inputs, language_embeds = inputs
 
-        image_feature, auxiliary_features = self._get_feature(pixel_values, **kwargs)
-
+        clip_image_feature, image_feature, auxiliary_features = self._get_feature(
+            inputs, **kwargs
+        )
         out_feature = self._maybe_fuse(
             image_feature, auxiliary_features, language_embeds
         )
+
+        out_feature = self._interpolate_feature(out_feature)
+        out_feature = clip_image_feature + out_feature
+
+        # NOTE: Interpolate before fusion is also possible
         return BaseModelOutputWithPooling(
             # vision_feature_layer is -2 in Llava, so we need to add placeholder for the output
             hidden_states=[out_feature, None]
         )
 
-    def _get_feature(self, pixel_values: torch.Tensor, **kwargs):
-        feature: ImageEncoderOutput = self.encoder(pixel_values[0], **kwargs)
+    def _interpolate_feature(self, features: torch.Tensor):
+        batch_size = features.shape[0]
+
+        class_feature = features[:, :1, :]
+        patch_features = features[:, 1:, :]
+        patch_features = patch_features.reshape(
+            batch_size, self.encoder_patch_height, self.encoder_patch_width, -1
+        ).permute(0, 3, 1, 2)
+
+        patch_features = F.interpolate(
+            patch_features,
+            size=(self.clip_patch_height, self.clip_patch_width),
+            align_corners=True,
+            mode="bilinear",
+        ).permute(0, 2, 3, 1)
+        patch_features = patch_features.reshape(batch_size, -1, self.encoder_feature_dim)
+
+        features = torch.cat([class_feature, patch_features], dim=1)
+        return features
+
+    def _get_feature(self, inputs, **kwargs):
+        pixel_values = inputs[0]
+        clip_inputs = inputs[1]
+        auxiliary_inputs = inputs[2:]
+
+        feature: ImageEncoderOutput = self.clip_encoder(**clip_inputs, **kwargs)
+        clip_image_feature = feature.hidden_states[self.vision_feature_layer]
+
+        feature: ImageEncoderOutput = self.encoder(pixel_values, **kwargs)
         image_feature = feature.hidden_states[self.vision_feature_layer]
+
         main_dim = tuple(image_feature.shape)
 
         auxiliary_features = self._maybe_get_auxiliary_features(
-            pixel_values,
+            auxiliary_inputs,
             main_dim,
             device=image_feature.device,
             dtype=image_feature.dtype,
             **kwargs,
         )
 
-        return image_feature, auxiliary_features
+        return clip_image_feature, image_feature, auxiliary_features
 
     def _maybe_fuse(
         self,
@@ -223,7 +278,7 @@ class VisionTower(torch.nn.Module):
 
     def _maybe_get_auxiliary_features(
         self,
-        pixel_values: torch.Tensor,
+        auxiliary_inputs,
         main_dim: Tuple[int, int, int],
         device: torch.device = torch.device("cuda"),
         dtype: torch.dtype = torch.bfloat16,
@@ -234,7 +289,7 @@ class VisionTower(torch.nn.Module):
 
         auxiliary_features = []
         for i, encoder in enumerate(self.auxiliary_encoders):
-            inputs = pixel_values[i + 1]
+            inputs = auxiliary_inputs[i]
 
             use_processed = inputs["use_processed"].all()
             inputs.pop("use_processed")
@@ -246,7 +301,7 @@ class VisionTower(torch.nn.Module):
 
             if output.use_pred:
                 # NOTE: A special case for segmentation
-                preprocess = self.processors[0](
+                preprocess = self.auxiliary_processors[0](
                     output.predictions.to(dtype=torch.float32),
                     return_tensors="pt",  # return as pytorch tensors
                 )

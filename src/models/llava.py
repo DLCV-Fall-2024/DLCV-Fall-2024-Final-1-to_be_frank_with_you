@@ -1,39 +1,21 @@
-from dataclasses import dataclass
-from functools import partial
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-import numpy as np
 import torch
-import torch.nn as nn
-from peft import LoraConfig, PeftMixedModel, PeftModel, get_peft_model
+from peft import LoraConfig, PeftMixedModel, get_peft_model
 from PIL.Image import Image
 from transformers import (
-    BaseImageProcessor,
     LlavaForConditionalGeneration,
     LlavaProcessor,
 )
-from transformers.modeling_outputs import BaseModelOutputWithPooling
 
-from src.arguments.dataclass import ModelParams
+# from src.arguments.dataclass import ModelParams
+from src.arguments.deepspeed import ModelParams
 from src.utils import batch_feature_to_dict, container_cat, default
 
-from .encoder import (
-    DepthEncoder,
-    ImageEncoderOutput,
-    SegmentationEncoder,
-    VisionEncoder,
-)
 from .utils import ensure_all_on_device, ensure_all_same_dtype
 from .vision_tower import VisionTower
-
-# try:
-#     from deepspeed.runtime.zero.stage3 import (
-#         estimate_zero3_model_states_mem_needs_all_live,
-#     )
-# except ImportError:
-#     print("DeepSpeed not installed")
-#     pass
+from .encoder.base import VisionEncoder
 
 
 class LlavaPEFT(torch.nn.Module):
@@ -54,31 +36,40 @@ class LlavaPEFT(torch.nn.Module):
             torch_dtype=torch_dtype,
         )
 
+        processor: LlavaProcessor = LlavaProcessor.from_pretrained(
+            model_params.model_id
+        )
+        processor.vision_feature_select_strategy = (
+            model_params.vision_feature_select_strategy
+        )
+        self.processor = processor
+
+        # Extract parameters from original vision models
+        clip_encoder = llava.vision_tower.vision_model
+        clip_processor = processor.image_processor
+
+        # image_size = clip_encoder.config.image_size
+        # patch_size = clip_encoder.config.patch_size
+
         # Change the vision tower to the encoder
         vision_feature_layer = default(llava.config.vision_feature_layer, -2)
         self.conditional_fuser = model_params.conditional_fuser
         self.condition_dropout = model_params.condition_dropout
         language_embeds_dim = llava.get_input_embeddings().weight.shape[1]
 
+        clip_encoder = VisionEncoder(
+            model = clip_encoder,
+            processor = clip_processor,
+        )
         self.vision_tower = VisionTower(
             model_params,
+            clip_encoder,
             vision_feature_layer,
             language_embeds_dim=language_embeds_dim,
             torch_dtype=torch_dtype,
             device=device,
         )
         llava.vision_tower = self.vision_tower
-
-        # Update vision related config
-        encoder_config = self.vision_tower.encoder.model.config
-        llava.config.vision_config = encoder_config
-
-        image_size = self.vision_tower.encoder.processor.crop_size
-        patch_size = self.vision_tower.encoder.model.config.patch_size
-        image_seq_length = (image_size["height"] // patch_size) * (
-            image_size["width"] // patch_size
-        )
-        llava.config.image_seq_length = image_seq_length
 
         # Remove projector layers from lora for direct finetuning
         self.no_lora_but_FF_prefix = default(
@@ -121,16 +112,7 @@ class LlavaPEFT(torch.nn.Module):
             if any([prefix in name for prefix in self.no_lora_but_FF_prefix]):
                 param.requires_grad = True
 
-        processor: LlavaProcessor = LlavaProcessor.from_pretrained(
-            model_params.model_id
-        )
-        processor.image_processor = self.vision_tower.encoder.processor
-        processor.patch_size = patch_size
-        processor.vision_feature_select_strategy = (
-            model_params.vision_feature_select_strategy
-        )
-        self.processor = processor
-
+        
     def get_model_struct(self):
         return str(self.llava)
 
@@ -158,6 +140,7 @@ class LlavaPEFT(torch.nn.Module):
         )
 
         inputs["pixel_values"] = image_inputs["pixel_values"]
+        inputs["clip_inputs"] = image_inputs["clip_inputs"]
         inputs["aux_inputs"] = image_inputs["aux_inputs"]
 
         return inputs
@@ -165,13 +148,14 @@ class LlavaPEFT(torch.nn.Module):
     def forward(
         self,
         pixel_values: torch.Tensor,
-        aux_inputs: Optional[List[torch.Tensor]] = None,
+        clip_inputs: Dict[str, Any],
+        aux_inputs: Optional[List[Dict[str, Any]]] = None,
         **inputs,
     ):
         if aux_inputs is not None:
-            inputs["pixel_values"] = [pixel_values, *aux_inputs]
+            inputs["pixel_values"] = [pixel_values, clip_inputs, *aux_inputs]
         else:
-            inputs["pixel_values"] = [pixel_values]
+            inputs["pixel_values"] = [pixel_values, clip_inputs]
 
         if self.conditional_fuser:
             # language_embeds = self.llava.base_model.get_input_embeddings()(
@@ -184,7 +168,7 @@ class LlavaPEFT(torch.nn.Module):
             outputs = self.llava.base_model(**lang_inputs, output_hidden_states=True)
             embeddings: torch.Tensor = outputs.hidden_states[-1]
 
-            attention_mask: torch.Tensor = inputs["attention_mask"]
+            attention_mask: torch.Tensor = lang_inputs["attention_mask"]
             mask_expanded = attention_mask.unsqueeze(-1).expand(embeddings.size())
             sum_embeddings = torch.sum(embeddings * mask_expanded, dim=1)
             sum_mask = torch.clamp(attention_mask.sum(dim=1).unsqueeze(-1), min=1e-9)

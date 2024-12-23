@@ -16,7 +16,7 @@ def main():
     parser.add_argument("--name", type=str, help="Name of the config presets")
     parser.add_argument("--local_rank", type=int, required=True, help="Local rank")
 
-    Config().load(parser)
+    Config().load(parser, sentinel=True)
     args = parser.parse_args()
 
     # Get DeepSpeed metadata
@@ -67,7 +67,7 @@ def main():
     dp = config.dataset
     dsp = config.deepspeed
 
-    seed_everything(config.seed)    
+    seed_everything(config.seed)
 
     if config.liger_kernel:
         apply_liger_kernel_to_llama()
@@ -81,7 +81,16 @@ def main():
     # TODO: Use zero3's reduction instead
     dsp.config.pop("zero_optimization")
 
-    addition_config["model_struct"] = model.get_model_struct()
+    model_struct = {"model_struct": model.get_model_struct()}
+    trainable_params = {
+        "tranable_params": [
+            name for name, param in model.named_parameters() if param.requires_grad
+        ]
+    }
+    
+    dump_config(config, output_dir / "config.yaml")
+    dump_config(model_struct, output_dir / "model_struct.yaml")
+    dump_config(trainable_params, output_dir / "trainable_params.yaml")
 
     transform = model.transform
     processor = model.processor
@@ -90,10 +99,6 @@ def main():
     print(
         f"Trainable: {trainable_params/1e6:.4f}M | All: {all_param/1e6:.4f}M | Ratio: {trainable_params/all_param * 100:.3f}%"
     )
-
-    dump_config(config, output_dir / "config.yaml")
-    dump_config(addition_config, output_dir / "model_config.yaml")
-    del addition_config
 
     ### We don't transform the inputs in the dataset since we don't know the prompt size in advance (fix-sized padding introduces overhead)
     ### Instead, we will transform the inputs in the inference loop.
