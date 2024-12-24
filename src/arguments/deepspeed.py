@@ -30,6 +30,7 @@ class ModelParams(ParamGroup):
             "multi_modal_projector",
             "fuser",
             "vision_tower.AdaLNZero",
+            "vision_tower.AdaLNZeroCLIP",
             "auxiliary_projectors",
         ]
     )
