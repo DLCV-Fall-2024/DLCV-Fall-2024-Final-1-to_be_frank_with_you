@@ -9,7 +9,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPooling
 from PIL.Image import Image
 from pathlib import Path
 
-from src.arguments.dataclass import ModelParams
+from src.arguments.deepspeed import ModelParams
 
 from .encoder import (
     DepthEncoder,
@@ -25,10 +25,10 @@ class MergedImageProcessor(BaseImageProcessor):
 
     def __init__(
         self,
-        clip_processor: BaseImageProcessor,
         encoder_processor: BaseImageProcessor,
         auxiliary_processors: List[BaseImageProcessor],
         encoder_index: Dict[str, int],
+        clip_processor: Optional[BaseImageProcessor] = None,
         torch_dtype: torch.dtype = torch.bfloat16,
         device: torch.device = torch.device("cpu"),
     ):
@@ -53,10 +53,12 @@ class MergedImageProcessor(BaseImageProcessor):
             processed_image_encoder_index.append(self.encoder_index[key])
             processed_image_encoder_index_map[self.encoder_index[key]] = key
 
-        clip_inputs = self.clip_processor(images, **kwargs)
         inputs = self.encoder_processor(images, **kwargs)
-        auxiliary_inputs = []
 
+        if self.clip_processor:
+            inputs["clip_inputs"] = self.clip_processor(images, **kwargs)
+        
+        auxiliary_inputs = []
         for i, processor in enumerate(self.auxiliary_processors):
             # If current encoder is given a processed image, use the processed image
             if i in processed_image_encoder_index:
@@ -72,7 +74,6 @@ class MergedImageProcessor(BaseImageProcessor):
 
             auxiliary_inputs.append(aux_inputs)
 
-        inputs["clip_inputs"] = clip_inputs
         inputs["aux_inputs"] = auxiliary_inputs
 
         return inputs
@@ -83,7 +84,7 @@ class VisionTower(torch.nn.Module):
     def __init__(
         self,
         model_params: ModelParams,
-        clip_encoder: VisionEncoder,
+        clip_encoder: Optional[VisionEncoder] = None,
         vision_feature_layer: int = -2,
         language_embeds_dim: int = 768,
         segment_type: str = "semantic",  # ["semantic", "instance", "panoptic"]
@@ -93,28 +94,31 @@ class VisionTower(torch.nn.Module):
     ):
         super().__init__()
 
-        self.clip_encoder = clip_encoder
-        # Get the feature dimension of the clip encoder
-        image_size = self.clip_encoder.processor.crop_size
-        patch_size = self.clip_encoder.model.config.patch_size
-        self.clip_patch_width = image_size["width"] // patch_size
-        self.clip_patch_height = image_size["height"] // patch_size
-        self.clip_feature_dim = self.clip_encoder.model.config.hidden_size
-
         self.encoder = VisionEncoder(model_params.encoder_id)
         # Get the feature dimension of the encoder
         image_size = self.encoder.processor.crop_size
-        patch_size = self.encoder.model.config.patch_size
-        self.encoder_patch_width = image_size["width"] // patch_size
-        self.encoder_patch_height = image_size["height"] // patch_size
+        self.encoder_patch_size = self.encoder.model.config.patch_size
+        self.encoder_patch_width = image_size["width"] // self.encoder_patch_size
+        self.encoder_patch_height = image_size["height"] // self.encoder_patch_size
         self.encoder_feature_dim = self.encoder.model.config.hidden_size
 
-        # NOTE: We may add projector if the feature dimension is different
-        assert (
-            self.clip_feature_dim == self.encoder_feature_dim
-        ), "The feature dimension of the clip encoder and the encoder must be the same, but got {} and {}".format(
-            self.clip_feature_dim, self.encoder_feature_dim
-        )
+        self.use_clip = model_params.use_clip
+        self.interpolation_mode = model_params.interpolation_mode
+        if self.use_clip:
+            self.clip_encoder = clip_encoder
+            # Get the feature dimension of the clip encoder
+            image_size = self.clip_encoder.processor.crop_size
+            self.clip_patch_size = self.clip_encoder.model.config.patch_size
+            self.clip_patch_width = image_size["width"] // self.clip_patch_size
+            self.clip_patch_height = image_size["height"] // self.clip_patch_size
+            self.clip_feature_dim = self.clip_encoder.model.config.hidden_size
+
+            # NOTE: We may add projector if the feature dimension is different
+            assert (
+                self.clip_feature_dim == self.encoder_feature_dim
+            ), "The feature dimension of the clip encoder and the encoder must be the same, but got {} and {}".format(
+                self.clip_feature_dim, self.encoder_feature_dim
+            )
 
         self.auxiliary_processors = []
         self.vision_feature_layer = vision_feature_layer
@@ -186,10 +190,10 @@ class VisionTower(torch.nn.Module):
 
         # Create merged image processor
         self.processor = MergedImageProcessor(
-            self.clip_encoder.processor,
             self.encoder.processor,
             self.auxiliary_processors,
             encoder_index=self.encoder_index,
+            clip_processor=self.clip_encoder.processor if self.use_clip else None,
             torch_dtype=torch_dtype,
             device=device,
         )
@@ -207,8 +211,9 @@ class VisionTower(torch.nn.Module):
             image_feature, auxiliary_features, language_embeds
         )
 
-        out_feature = self._interpolate_feature(out_feature)
-        out_feature = clip_image_feature + out_feature
+        if self.use_clip:
+            out_feature = self._interpolate_feature(out_feature)
+            out_feature = clip_image_feature + out_feature
 
         # NOTE: Interpolate before fusion is also possible
         return BaseModelOutputWithPooling(
@@ -228,27 +233,30 @@ class VisionTower(torch.nn.Module):
         patch_features = F.interpolate(
             patch_features,
             size=(self.clip_patch_height, self.clip_patch_width),
-            align_corners=True,
-            mode="bilinear",
+            align_corners=True if self.interpolation_mode != "nearest" else None,
+            mode=self.interpolation_mode,
         ).permute(0, 2, 3, 1)
-        patch_features = patch_features.reshape(batch_size, -1, self.encoder_feature_dim)
+        patch_features = patch_features.reshape(
+            batch_size, -1, self.encoder_feature_dim
+        )
 
         features = torch.cat([class_feature, patch_features], dim=1)
         return features
 
     def _get_feature(self, inputs, **kwargs):
         pixel_values = inputs[0]
-        clip_inputs = inputs[1]
+        clip_inputs = inputs[1]  # Would be zero if not use clip
         auxiliary_inputs = inputs[2:]
-
-        feature: ImageEncoderOutput = self.clip_encoder(**clip_inputs, **kwargs)
-        clip_image_feature = feature.hidden_states[self.vision_feature_layer]
 
         feature: ImageEncoderOutput = self.encoder(pixel_values, **kwargs)
         image_feature = feature.hidden_states[self.vision_feature_layer]
 
-        main_dim = tuple(image_feature.shape)
+        clip_image_feature = None
+        if self.use_clip:
+            feature: ImageEncoderOutput = self.clip_encoder(**clip_inputs, **kwargs)
+            clip_image_feature = feature.hidden_states[self.vision_feature_layer]
 
+        main_dim = tuple(image_feature.shape)
         auxiliary_features = self._maybe_get_auxiliary_features(
             auxiliary_inputs,
             main_dim,

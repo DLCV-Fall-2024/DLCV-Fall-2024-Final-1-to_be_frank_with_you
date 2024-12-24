@@ -1,14 +1,14 @@
-from typing import List, Tuple, Dict, Any, TypeVar, Type, cast
-
-import torch
-from omegaconf.dictconfig import DictConfig
-from omegaconf import OmegaConf
-from transformers.feature_extraction_utils import BatchFeature
+from argparse import Namespace
 from copy import deepcopy
 from dataclasses import is_dataclass
-from argparse import Namespace
+from typing import Any, Dict, List, Tuple, Type, TypeVar, cast
 
-from src.arguments import DataclassInstanceAndParamGroup, Dataclass
+import torch
+from omegaconf import OmegaConf
+from omegaconf.dictconfig import DictConfig
+from transformers.feature_extraction_utils import BatchFeature
+
+from src.arguments import Dataclass, DataclassInstanceAndParamGroup
 
 
 def default(val, default_val):
@@ -88,6 +88,21 @@ def batch_feature_to_dict(
         return type(container)(batch_feature_to_dict(item) for item in container)
     else:
         return container
+
+
+def pad_sequences(sequences, padding_token):
+    dtype = sequences[0].dtype
+    max_length = max(sequence.shape[1] for sequence in sequences)
+    paddings = [
+        torch.tensor([[padding_token] * (max_length - sequence.shape[1])], dtype=dtype)
+        for sequence in sequences
+    ]
+
+    padded_sequences = [
+        torch.cat((paddings[i], sequence), dim=1)
+        for i, sequence in enumerate(sequences)
+    ]
+    return padded_sequences
 
 
 def convert_to_dict(config: DictConfig | Dataclass) -> Dict:

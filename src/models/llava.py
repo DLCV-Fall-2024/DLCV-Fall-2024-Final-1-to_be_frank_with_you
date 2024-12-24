@@ -4,18 +4,15 @@ from typing import Any, Dict, List, Optional
 import torch
 from peft import LoraConfig, PeftMixedModel, get_peft_model
 from PIL.Image import Image
-from transformers import (
-    LlavaForConditionalGeneration,
-    LlavaProcessor,
-)
+from transformers import LlavaForConditionalGeneration, LlavaProcessor
 
 # from src.arguments.dataclass import ModelParams
 from src.arguments.deepspeed import ModelParams
-from src.utils import batch_feature_to_dict, container_cat, default
+from src.utils import batch_feature_to_dict, container_cat, default, pad_sequences
 
+from .encoder.base import VisionEncoder
 from .utils import ensure_all_on_device, ensure_all_same_dtype
 from .vision_tower import VisionTower
-from .encoder.base import VisionEncoder
 
 
 class LlavaPEFT(torch.nn.Module):
@@ -42,14 +39,6 @@ class LlavaPEFT(torch.nn.Module):
         processor.vision_feature_select_strategy = (
             model_params.vision_feature_select_strategy
         )
-        self.processor = processor
-
-        # Extract parameters from original vision models
-        clip_encoder = llava.vision_tower.vision_model
-        clip_processor = processor.image_processor
-
-        # image_size = clip_encoder.config.image_size
-        # patch_size = clip_encoder.config.patch_size
 
         # Change the vision tower to the encoder
         vision_feature_layer = default(llava.config.vision_feature_layer, -2)
@@ -57,19 +46,33 @@ class LlavaPEFT(torch.nn.Module):
         self.condition_dropout = model_params.condition_dropout
         language_embeds_dim = llava.get_input_embeddings().weight.shape[1]
 
-        clip_encoder = VisionEncoder(
-            model = clip_encoder,
-            processor = clip_processor,
-        )
+        self.use_clip = model_params.use_clip
+        clip_encoder = None
+        if self.use_clip:
+            clip_encoder = VisionEncoder(
+                model=llava.vision_tower.vision_model,
+                processor=processor.image_processor,
+            )
+
         self.vision_tower = VisionTower(
             model_params,
-            clip_encoder,
-            vision_feature_layer,
+            clip_encoder=clip_encoder,
+            vision_feature_layer=vision_feature_layer,
             language_embeds_dim=language_embeds_dim,
             torch_dtype=torch_dtype,
             device=device,
         )
         llava.vision_tower = self.vision_tower
+
+        # Update vision related config if not use clip
+        if not self.use_clip:
+            llava.config.vision_config = self.vision_tower.encoder.model.config
+            llava.config.image_seq_length = (
+                self.vision_tower.encoder_patch_width
+                * self.vision_tower.encoder_patch_height
+            )
+            processor.image_processor = self.vision_tower.encoder.processor
+            processor.patch_size = self.vision_tower.encoder_patch_size
 
         # Remove projector layers from lora for direct finetuning
         self.no_lora_but_FF_prefix = default(
@@ -99,20 +102,14 @@ class LlavaPEFT(torch.nn.Module):
         # Apply LoRA
         lora_config = LoraConfig(**lora_config)
         self.llava: PeftMixedModel = get_peft_model(llava, lora_config)
+        self.processor = processor
+
         self.activate_only_lora()
-
-        # Estimate memory for zero3
-        # try:
-        #     estimate_zero3_model_states_mem_needs_all_live(self.llava)
-        # except:
-        #     pass
-
         # Activate finetuning the encoder
         for name, param in llava.named_parameters():
             if any([prefix in name for prefix in self.no_lora_but_FF_prefix]):
                 param.requires_grad = True
 
-        
     def get_model_struct(self):
         return str(self.llava)
 
@@ -140,8 +137,11 @@ class LlavaPEFT(torch.nn.Module):
         )
 
         inputs["pixel_values"] = image_inputs["pixel_values"]
-        inputs["clip_inputs"] = image_inputs["clip_inputs"]
         inputs["aux_inputs"] = image_inputs["aux_inputs"]
+        if self.use_clip:
+            inputs["clip_inputs"] = image_inputs["clip_inputs"]
+        else:
+            inputs["clip_inputs"] = 0  # placeholder
 
         return inputs
 
@@ -238,21 +238,6 @@ PADDING_TOKEN = 32001
 ATTENTION_MASK = 0
 
 
-def pad_sequences(sequences, padding_token):
-    dtype = sequences[0].dtype
-    max_length = max(sequence.shape[1] for sequence in sequences)
-    paddings = [
-        torch.tensor([[padding_token] * (max_length - sequence.shape[1])], dtype=dtype)
-        for sequence in sequences
-    ]
-
-    padded_sequences = [
-        torch.cat((paddings[i], sequence), dim=1)
-        for i, sequence in enumerate(sequences)
-    ]
-    return padded_sequences
-
-
 def collate_fn(batch):
     # From List[BatchFeature] to List[Dict]
     datamaps = [batch_feature_to_dict(item[1]) for item in batch]
@@ -273,15 +258,8 @@ def collate_fn(batch):
         datamap["attention_mask"] = padded_attention_mask[i]
 
     merged_ids = [item[0] for item in batch]
-    merged_data = {}
-
-    for i, key in enumerate(data_keys):
-        data_list = [datamap[key] for datamap in datamaps]
-        data_list = container_cat(data_list, dim=0)
-        merged_data[key] = data_list
-
     # Return the updated batch
-    return merged_ids, merged_data
+    return merged_ids, container_cat(datamaps, dim=0)
 
 
 if __name__ == "__main__":
