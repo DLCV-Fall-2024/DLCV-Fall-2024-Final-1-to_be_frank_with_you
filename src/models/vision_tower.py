@@ -42,7 +42,7 @@ class MergedImageProcessor(BaseImageProcessor):
         self.device = device
         self.torch_dtype = torch_dtype
 
-    def preprocess(self, images, processed_images: Dict[str, Any], **kwargs):
+    def preprocess(self, images, processed_images: Dict[str, Any] = {}, **kwargs):
         if "padding" in kwargs:
             del kwargs["padding"]
 
@@ -209,6 +209,24 @@ class VisionTower(torch.nn.Module):
         language_embeds = None
         if self.conditional_fuser:
             inputs, language_embeds = inputs
+
+        if inputs is None:
+            batch_size = language_embeds.shape[0]
+            feature_dim = (
+                self.encoder_feature_dim if not self.use_clip else self.clip_feature_dim
+            )
+            return BaseModelOutputWithPooling(
+                hidden_states=[
+                    torch.zeros(
+                        batch_size,
+                        0,
+                        feature_dim,
+                        device=language_embeds.device,
+                        dtype=language_embeds.dtype,
+                    ),
+                    None,
+                ]
+            )
 
         clip_image_feature, image_feature, auxiliary_features = self._get_feature(
             inputs, **kwargs

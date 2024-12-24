@@ -18,7 +18,7 @@ class ModelParams(ParamGroup):
 
     use_depth: bool = True
     depth_model_id: str = "depth-anything/Depth-Anything-V2-Small-hf"
-    
+
     use_segmentation: bool = True
     segmentation_model_id: str = "shi-labs/oneformer_ade20k_dinat_large"
 
@@ -34,7 +34,7 @@ class ModelParams(ParamGroup):
             "auxiliary_projectors",
         ]
     )
-    
+
     vision_feature_select_strategy: str = "full"  # "default" or "full"
     gradient_checkpointing: bool = True
     lora_config: dict = field(
@@ -75,6 +75,7 @@ class DatasetParams(ParamGroup):
     def extract(self, args):
         return super().extract(args)
 
+
 @dataclass
 class DeepSpeedParams(ParamGroup):
     epochs: int = 1
@@ -100,7 +101,7 @@ class Config(ParamGroup):
     wandb: bool = True
     project_name: Optional[str] = None
     run_name: Optional[str] = None
-    
+
     finetune_language: bool = True
     resume: Optional[str] = None
     resume_tag: Optional[str] = None
@@ -120,4 +121,37 @@ class Config(ParamGroup):
         p["model"] = self.model.extract(args)
         p["dataset"] = self.dataset.extract(args)
         p["deepspeed"] = self.deepspeed.extract(args)
+        return p
+
+
+@dataclass
+class GenerateParams(ParamGroup):
+    config_path: Optional[str] = None
+    output_dir: Optional[str] = None
+    dataset_path: str = "data/test"
+
+    seed: int = 42
+    batch_size: int = 4
+    num_workers: int = 10
+    prefetch_factor: int = 20
+    max_new_tokens: int = 1024
+    generation_config: dict = field(
+        default_factory=lambda: {
+            "do_sample": False,
+        }
+    )
+    use_regex: bool = True
+
+    model_path: Optional[str] = None
+    model_config: Config = field(default_factory=Config)
+
+    def load(self, parser: ArgumentParser, sentinel: bool = False):
+        super().__init__(
+            parser=parser, name="Generation Parameters", fill_none=sentinel
+        )
+        self.model_config.load(parser, sentinel)
+
+    def extract(self, args):
+        p = super().extract(args)
+        p["model_config"] = self.model_config.extract(args)
         return p

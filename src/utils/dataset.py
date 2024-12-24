@@ -13,6 +13,11 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from tqdm import tqdm
 
+from src.utils import batch_feature_to_dict, container_cat, default, pad_sequences
+
+PADDING_TOKEN = 32001
+ATTENTION_MASK = 0
+
 
 @dataclass_json
 @dataclass
@@ -180,22 +185,215 @@ class DiscDataset(Dataset):
         #         inputs[key] = inputs[key].squeeze(0)
         return (item.id, inputs)
 
-    def __trainer_getitem__(self, idx: int):
+
+import pickle
+
+from pymilvus import MilvusClient
+
+
+class RAGDataset(Dataset):
+
+    def __init__(
+        self,
+        path: Union[str, Path],
+        client: MilvusClient,
+        transform: Optional[Transform] = None,
+    ):
+        path = Path(path)
+        img_dir = path / "images"
+        config_path = path / "config.json"
+        obj_path = path / "obj_info.pkl"
+        assert config_path.exists(), f"config.json not found in {path}"
+        assert (
+            img_dir.exists() and img_dir.is_dir()
+        ), f"images directory not found in {path}"
+
+        with open(config_path, "r") as f:
+            config = cast(DiscDatasetConfig, DiscDatasetConfig.from_json(f.read()))
+
+        with open(obj_path, "rb") as f:
+            target_data = pickle.load(f)
+
+        self.obj_info = target_data
+
+        self.config = config.data
+        self.prompts = config.prompts
+        self.sys_prompt = (
+            "You are an AI model designed to analyze traffic scenes and provide a detailed "
+            "interpretation of the image based on provided detected objects information.\n\n"
+            "Below are examples:\n\n"
+        )
+        self.usr_prompt = (
+            "Now, analyze the following scene:\n\n"
+            "Objects: {objects_text}\n"
+            "Based on this information, generate a response similar to the example above"
+        )
+
+        self.client = client
+        self.transform = cast(Transform, transform)
+
+    def __len__(self):
+        return len(self.config)
+
+    def __getitem__(self, idx: int):
         item = self.config[idx]
-        img = PIL.Image.open(item.img_path).convert("RGB")
+        id = item.id
         prompt = item.prompt
+        img_path = item.img_path
         if isinstance(prompt, int):
             prompt = self.prompts[prompt]
 
-        inputs: dict = self.transform(img, prompt=apply_chat_template(prompt))
-        for key in inputs.keys():
-            inputs[key] = inputs[key].squeeze(0)
+        my_info = self.obj_info[img_path]["object_info"]
 
-        inputs["labels"] = inputs["input_ids"].clone()
-        inputs["id"] = item.id
-        inputs.update(self.trainer_input_kwargs)
+        res = self.client.search(
+            f"object_info_{id.split("_")[1]}",
+            data=[self.obj_info[img_path]["vector"]],
+            limit=2,
+            output_fields=["text", "object_info", "image_path"],
+        )
+        res = res[0]
+        raw_prompt = [{"role": "system", "prompt": self.sys_prompt}]
+        for item in res:
+            raw_prompt.append(
+                {"role": "user", "prompt": f"Objects: {item["entity"]["object_info"]}"}
+            )
+            raw_prompt.append({"role": "assistant", "prompt": item["entity"]["text"]})
+        raw_prompt.append(
+            {"role": "user", "prompt": self.usr_prompt.format(objects_text=my_info)}
+        )
+        prompt = apply_chat_template(raw_prompt)
 
-        return inputs
+        # (image, prompt)
+        inputs = self.transform(None, prompt)
+        return id, inputs
+
+
+def rag_collate_fn(batch):
+    # From List[BatchFeature] to List[Dict]
+    # index, inputs
+    indexs = [item[0] for item in batch]
+    inputs = [batch_feature_to_dict(item[1]) for item in batch]
+    inputs_keys = inputs[0].keys()
+
+    merged_data = {}
+    input_ids = [elem["input_ids"] for elem in inputs]
+    # token_type_ids = [elem["token_type_ids"] for elem in inputs]
+    attention_mask = [elem["attention_mask"] for elem in inputs]
+    padded_input_ids = pad_sequences(input_ids, PADDING_TOKEN)
+    # padded_token_type_ids = pad_sequences(token_type_ids, PADDING_TOKEN)
+    padded_attention_mask = pad_sequences(attention_mask, ATTENTION_MASK)
+
+    # Update the batch with padded input_ids
+    for i, datamap in enumerate(inputs):
+        datamap["input_ids"] = padded_input_ids[i]
+        # datamap["token_type_ids"] = padded_token_type_ids[i]
+        datamap["attention_mask"] = padded_attention_mask[i]
+
+    for i, key in enumerate(inputs_keys):
+        data_list = [datamap[key] for datamap in inputs]
+        data_list = container_cat(data_list, dim=0)
+        merged_data[key] = data_list
+
+    return indexs, merged_data
+
+
+class BoxInfoPreProcessorDataset(Dataset):
+
+    def __init__(
+        self,
+        path: Union[str, Path],
+        GD_processor: Transform,
+        Dep_image_processor: Transform,
+        labels: str,
+    ):
+        path = Path(path)
+        config_path = path / "config.json"
+
+        with open(config_path, "r") as f:
+            config = json.load(f)
+
+        self.data = []
+        for item in config["data"]:
+            self.data.append(item)
+        self.GD_processor = GD_processor
+        self.Dep_image_processor = Dep_image_processor
+        self.label = labels
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx: int):
+        item = self.data[idx]
+        id = item["id"]
+        gt = item["gt"]
+        if gt is None:
+            gt = ""
+        img_path = item["img_path"]
+        image = PIL.Image.open(str(img_path)).convert("RGB")
+        gd_inputs = self.GD_processor(
+            image,
+            text=self.label,
+            return_tensors="pt",
+            do_resize=True,
+            size={"width": 1024, "height": 720},
+        )
+        dp_inputs = self.Dep_image_processor(
+            images=image,
+            return_tensors="pt",
+            do_resize=True,
+            keep_aspect_ratio=False,
+            # size={"height": 384, "width": 384},
+        )
+
+        shape = image.size[::-1]
+        image.close()
+
+        return (str(img_path), gd_inputs, dp_inputs, gt, shape, str(id))
+
+
+def preprocessor_collate_fn(batch):
+    # From List[BatchFeature] to List[Dict]
+    # index, gd_inputs, dp_inputs, gt, target_sizes
+    indexs = [item[0] for item in batch]
+    gd_inputs = [batch_feature_to_dict(item[1]) for item in batch]
+    dp_inputs = [batch_feature_to_dict(item[2]) for item in batch]
+    gts = [item[3] for item in batch]
+    target_sizes = [item[4] for item in batch]
+    ids = [item[5] for item in batch]
+
+    # ['input_ids', 'token_type_ids', 'attention_mask', 'pixel_values', 'pixel_mask']
+    gd_inputs_keys = gd_inputs[0].keys()
+    # ['pixel_values']
+    dp_inputs_keys = dp_inputs[0].keys()
+
+    merged_gd_data = {}
+    input_ids = [elem["input_ids"] for elem in gd_inputs]
+    token_type_ids = [elem["token_type_ids"] for elem in gd_inputs]
+    attention_mask = [elem["attention_mask"] for elem in gd_inputs]
+    padded_input_ids = pad_sequences(input_ids, PADDING_TOKEN)
+    padded_token_type_ids = pad_sequences(token_type_ids, PADDING_TOKEN)
+    padded_attention_mask = pad_sequences(attention_mask, ATTENTION_MASK)
+
+    # Update the batch with padded input_ids
+    for i, datamap in enumerate(gd_inputs):
+        datamap["input_ids"] = padded_input_ids[i]
+        datamap["token_type_ids"] = padded_token_type_ids[i]
+        datamap["attention_mask"] = padded_attention_mask[i]
+
+    for i, key in enumerate(gd_inputs_keys):
+        data_list = [datamap[key] for datamap in gd_inputs]
+        data_list = container_cat(data_list, dim=0)
+        merged_gd_data[key] = data_list
+
+    merged_dp_data = {}
+
+    for i, key in enumerate(dp_inputs_keys):
+        data_list = [datamap[key] for datamap in dp_inputs]
+        data_list = container_cat(data_list, dim=0)
+        merged_dp_data[key] = data_list
+
+    # Return the updated batch
+    return indexs, merged_gd_data, merged_dp_data, gts, target_sizes, ids
 
 
 VALID_SPLIT = ["train", "val", "test", "all"]
@@ -246,11 +444,38 @@ def compress_config(config_path: Union[str, Path]):
     )
 
 
-role_mapping = {"user": "USER", "assistant": "ASSISTANT"}
+role_mapping = {"system": "USER", "user": "USER", "assistant": "ASSISTANT"}
 
 
 def apply_chat_template(conversation):
-    return "USER: " + conversation + "ASSISTANT:"
+    if isinstance(conversation, list):
+        return __apply_chat_template_list(conversation)
+    elif isinstance(conversation, str):
+        return "USER: " + conversation + "ASSISTANT:"
+    elif isinstance(conversation, dict):
+        assert "role" in conversation, f"role not found in conversation {conversation}"
+        assert (
+            "prompt" in conversation
+        ), f"text not found in conversation {conversation}"
+        role = conversation["role"].lower()
+        assert role in role_mapping, f'"{role}" not found in mapping'
+        return role_mapping[role] + ": " + conversation["prompt"]
+    else:
+        raise ValueError(f"Invalid conversation type: {type(conversation)}")
+
+
+def __apply_chat_template_list(conversation):
+
+    out = ""
+    for i, conv in enumerate(conversation):
+        assert "role" in conv, f"role not found in conversation {conv}"
+        assert "prompt" in conv, f"text not found in conversation {conv}"
+        role = conv["role"].lower()
+        assert role in role_mapping, f'"{role}" not found in mapping'
+        out += role_mapping[role] + ": " + conv["prompt"]
+        out += "\n"
+    out += "ASSISTANT:"
+    return out
 
 
 app = typer.Typer(pretty_exceptions_show_locals=False)

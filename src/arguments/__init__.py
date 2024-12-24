@@ -64,7 +64,7 @@ class ParamGroup:
                 else:
                     if not any(arg.dest == key for arg in group._actions):
                         group.add_argument(
-                            "--" + key, ("-" + key[0:1]), default=value, type=t
+                            "--" + key, ("-" + key[0:1]), default=value
                         )
             else:
                 if t == bool:
@@ -75,7 +75,7 @@ class ParamGroup:
                         )
                 else:
                     if not any(arg.dest == key for arg in group._actions):
-                        group.add_argument("--" + key, default=value, type=t)
+                        group.add_argument("--" + key, default=value)
 
     # def extract(self, args):
     #     group = GroupParams()

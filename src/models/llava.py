@@ -118,7 +118,7 @@ class LlavaPEFT(torch.nn.Module):
             param.requires_grad = "lora" in name
 
     def transform(
-        self, img: Image, prompt: str, processed_images: Dict[str, Image] = None
+        self, img: Optional[Image], prompt: str, processed_images: Dict[str, Image] = {}
     ):
         inputs = self.processor(
             img,
@@ -128,20 +128,21 @@ class LlavaPEFT(torch.nn.Module):
             do_rescale=True,
         )
 
-        image_inputs = self.vision_tower.processor(
-            img,
-            processed_images=processed_images,
-            return_tensors="pt",  # return as pytorch tensors
-            padding=True,
-            do_rescale=True,
-        )
+        if img is not None:
+            image_inputs = self.vision_tower.processor(
+                img,
+                processed_images=processed_images,
+                return_tensors="pt",  # return as pytorch tensors
+                padding=True,
+                do_rescale=True,
+            )
 
-        inputs["pixel_values"] = image_inputs["pixel_values"]
-        inputs["aux_inputs"] = image_inputs["aux_inputs"]
-        if self.use_clip:
-            inputs["clip_inputs"] = image_inputs["clip_inputs"]
-        else:
-            inputs["clip_inputs"] = 0  # placeholder
+            inputs["pixel_values"] = image_inputs["pixel_values"]
+            inputs["aux_inputs"] = image_inputs["aux_inputs"]
+            if self.use_clip:
+                inputs["clip_inputs"] = image_inputs["clip_inputs"]
+            else:
+                inputs["clip_inputs"] = 0  # placeholder
 
         return inputs
 
@@ -188,6 +189,12 @@ class LlavaPEFT(torch.nn.Module):
             return self
         return self.llava.merge_and_unload()
 
+    def unload(self, inplace: bool = False):
+        if inplace:
+            self.llava = self.llava.unload()
+            return self
+        return self.llava.unload()
+
     def unmerge_adapter(self):
         self.llava.unmerge_adapter()
 
@@ -210,14 +217,17 @@ class LlavaPEFT(torch.nn.Module):
 
     def generate(
         self,
-        pixel_values: torch.Tensor,
+        pixel_values: Optional[torch.Tensor] = None,
         aux_inputs: Optional[List[torch.Tensor]] = None,
         **inputs,
     ):
+
         if aux_inputs is not None:
             inputs["pixel_values"] = [pixel_values, *aux_inputs]
-        else:
+        elif pixel_values is not None:
             inputs["pixel_values"] = [pixel_values]
+        else:
+            inputs["pixel_values"] = None
 
         if self.conditional_fuser:
             language_embeds = self.llava.base_model.get_input_embeddings()(
@@ -226,6 +236,8 @@ class LlavaPEFT(torch.nn.Module):
 
             language_embeds = language_embeds.mean(dim=1)
             inputs["pixel_values"] = (inputs["pixel_values"], language_embeds)
+        
+        
         return self.llava.generate(**inputs)
 
     def finetune_language(self, finetune: bool = True):
