@@ -57,7 +57,7 @@ class MergedImageProcessor(BaseImageProcessor):
 
         if self.clip_processor:
             inputs["clip_inputs"] = self.clip_processor(images, **kwargs)
-        
+
         auxiliary_inputs = []
         for i, processor in enumerate(self.auxiliary_processors):
             # If current encoder is given a processed image, use the processed image
@@ -184,9 +184,15 @@ class VisionTower(torch.nn.Module):
         self.condition_dropout = model_params.condition_dropout
         if self.conditional_fuser:
             self.AdaLNZero = AdaLNZero(
-                hidden_dim=self.encoder.model.config.hidden_size,
+                hidden_dim=self.encoder_feature_dim,
                 condition_dim=language_embeds_dim,
             ).to(device=device, dtype=torch_dtype)
+
+            if self.use_clip:
+                self.AdaLNZeroCLIP = AdaLNZero(
+                    hidden_dim=self.clip_feature_dim,
+                    condition_dim=language_embeds_dim,
+                ).to(device=device, dtype=torch_dtype)
 
         # Create merged image processor
         self.processor = MergedImageProcessor(
@@ -213,7 +219,14 @@ class VisionTower(torch.nn.Module):
 
         if self.use_clip:
             out_feature = self._interpolate_feature(out_feature)
-            out_feature = clip_image_feature + out_feature
+            if self.conditional_fuser:
+                out_feature = self._apply_conditional_fuser(
+                    self.AdaLNZeroCLIP,
+                    [out_feature, clip_image_feature],
+                    language_embeds,
+                )
+            else:
+                out_feature = clip_image_feature + out_feature
 
         # NOTE: Interpolate before fusion is also possible
         return BaseModelOutputWithPooling(
@@ -279,7 +292,7 @@ class VisionTower(torch.nn.Module):
         fused_features = self.fuser(image_feature, auxiliary_features)
         if self.conditional_fuser:
             fused_features = self._apply_conditional_fuser(
-                fused_features, language_embeds
+                self.AdaLNZero, fused_features, language_embeds
             )
         # Residual connection
         return image_feature + fused_features
@@ -329,11 +342,9 @@ class VisionTower(torch.nn.Module):
             auxiliary_features.append(wanted_feature)
         return auxiliary_features
 
-    def _apply_conditional_fuser(self, fused_features, language_embeds):
+    def _apply_conditional_fuser(self, ada_ln_zero, fused_features, language_embeds):
         concatenated_features = torch.cat(fused_features, dim=1)
-        cond_adjust: torch.Tensor = self.AdaLNZero(
-            concatenated_features, language_embeds
-        )
+        cond_adjust: torch.Tensor = ada_ln_zero(concatenated_features, language_embeds)
 
         adjust_feature = torch.stack(
             cond_adjust.chunk(self.n_auxiliary_features, dim=1), dim=0
