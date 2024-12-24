@@ -219,10 +219,13 @@ class LlavaPEFT(torch.nn.Module):
         self,
         pixel_values: Optional[torch.Tensor] = None,
         aux_inputs: Optional[List[torch.Tensor]] = None,
+        clip_inputs: Dict[str, Any] = None,
         **inputs,
     ):
 
-        if aux_inputs is not None:
+        if aux_inputs is not None and clip_inputs is not None:
+            inputs["pixel_values"] = [pixel_values, clip_inputs, *aux_inputs]
+        elif aux_inputs is not None:
             inputs["pixel_values"] = [pixel_values, *aux_inputs]
         elif pixel_values is not None:
             inputs["pixel_values"] = [pixel_values]
@@ -236,8 +239,7 @@ class LlavaPEFT(torch.nn.Module):
 
             language_embeds = language_embeds.mean(dim=1)
             inputs["pixel_values"] = (inputs["pixel_values"], language_embeds)
-        
-        
+
         return self.llava.generate(**inputs)
 
     def finetune_language(self, finetune: bool = True):

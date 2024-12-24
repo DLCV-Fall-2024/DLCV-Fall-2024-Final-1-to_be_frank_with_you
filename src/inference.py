@@ -8,7 +8,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 def main():
     from pathlib import Path
 
-    from src.arguments.dataclass import Config, GenerateParams
+    # from src.arguments.dataclass import Config, GenerateParams
+    from src.arguments.deepspeed import Config, GenerateParams
     from src.utils import container_to, default, extract_args, load_dataclass
     from src.utils.experiment import dump_config, load_config
 
@@ -173,9 +174,9 @@ def main():
             # `input_ids` and `attention_mask` should be long tensors
             inputs["input_ids"] = inputs["input_ids"].to(device, torch.long)
             inputs["attention_mask"] = inputs["attention_mask"].to(device, torch.long)
-            print(
-                {k: v.dtype for k, v in inputs.items() if isinstance(v, torch.Tensor)}
-            )
+            # print(
+            #     {k: v.dtype for k, v in inputs.items() if isinstance(v, torch.Tensor)}
+            # )
 
             DEBUG.stamp()
             DEBUG.set_params(**{"ids": ids})

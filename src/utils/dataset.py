@@ -14,6 +14,7 @@ from torchvision import transforms
 from tqdm import tqdm
 
 from src.utils import batch_feature_to_dict, container_cat, default, pad_sequences
+from src.utils.prompt import INFERENCE_FINAL_PROMPT
 
 PADDING_TOKEN = 32001
 ATTENTION_MASK = 0
@@ -148,6 +149,12 @@ class DiscDataset(Dataset):
         prompt = item.prompt
         if isinstance(prompt, int):
             prompt = self.prompts[prompt]
+
+        obj_info = item.features.get("object_info", None)
+        if not self.is_train and obj_info is not None:
+            prompt = INFERENCE_FINAL_PROMPT.format(
+                rough_description=obj_info, task_description=prompt
+            )
 
         prompt = apply_chat_template(prompt)
         if self.is_train:
