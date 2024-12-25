@@ -15,23 +15,41 @@ for task in tasks:
 
 import pickle
 
-with open("data/test/obj_info.pkl", "rb") as f:
+with open("data/train/obj_info.pkl", "rb") as f:
     target_data = pickle.load(f)
 
-testdata = "data/test/images/00000.jpg"
-print(target_data[testdata].keys())
-print("target:", target_data[testdata]["object_info"])
+testdata = "data/train/images/00004.jpg"
+# print(target_data.keys())
+print(target_data[testdata])
+
+data = target_data[testdata]
+if isinstance(target_data[testdata], int):
+    data = client.get(
+        f"{collection_name}_general",
+        target_data[testdata],
+    )
+    data = data[0]
+
 res = client.search(
     f"{collection_name}_general",
-    data=[target_data[testdata]["vector"]],
-    limit=2,
+    data=[data["vector"]],
+    limit=4,
     output_fields=["text", "object_info", "image_path"],
 )
 print()
 import json
 import sys
 
-json.dump(res, sys.stdout, indent=4)
-print()
+print("target:", data["object_info"])
+data.pop("vector")
+out = {
+    "target": data,
+    "result": res,
+}
+
+
+with open("rag_test.json", "w") as f:
+    json.dump(out, f, indent=4)
+
 
 client.close()

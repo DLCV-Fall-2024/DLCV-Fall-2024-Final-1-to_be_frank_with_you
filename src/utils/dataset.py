@@ -55,6 +55,10 @@ class DiscDataset(Dataset):
         use_processed: bool = False,
         depth_model_id: str = "",
         segmentation_model_id: str = "",
+        skip_no_object_info: bool = False,
+        slice: Optional[int] = None,
+        total_slices: Optional[int] = None,
+        no_fewshot: bool = False,
     ):
         path = Path(path)
         img_dir = path / "images"
@@ -120,7 +124,12 @@ class DiscDataset(Dataset):
 
         self.config = config.data
         self.prompts = config.prompts
-
+        if skip_no_object_info:
+            self.config = [
+                item
+                for item in self.config
+                if item.features.get("object_info", None) is not None
+            ]
         if transform is None:
             transform = transforms.Compose(
                 [
@@ -139,6 +148,19 @@ class DiscDataset(Dataset):
 
         self.cache_dir = Path(cache_dir) if cache_dir is not None else None
 
+        if isinstance(slice, int) and isinstance(total_slices, int):
+            assert (
+                slice < total_slices
+            ), f"slice {slice} must be less than total_slices {total_slices}"
+            begin = (slice * len(self.config)) // total_slices
+            end = ((slice + 1) * len(self.config)) // total_slices
+            end = min(end, len(self.config))
+            self.config = self.config[begin:end]
+            print(
+                f"Using slice {slice} of {total_slices}, {len(self.config)} items (from {begin} to {end})"
+            )
+        self.no_fewshot = no_fewshot
+
     def __len__(self):
         return len(self.config)
 
@@ -152,20 +174,21 @@ class DiscDataset(Dataset):
         if isinstance(prompt, int):
             prompt = self.prompts[prompt]
 
-        obj_info: str = item.features.get("object_info", None)
-        obj_info = obj_info.replace("\n", "")
-        # if not self.is_train and obj_info is not None:
-        #     prompt = INFERENCE_FINAL_PROMPT.format(
-        #         rough_description=obj_info, task_description=prompt
-        #     )
-        if not self.is_train and obj_info is not None:
-            prompt = fillin_fewshot(
-                rough_description=obj_info, task_description=prompt.split("\n")[-1]
-            )
-        elif obj_info is not None and np.random.rand() < 0.5:
-            prompt = fillin_fewshot(
-                rough_description=obj_info, task_description=prompt.split("\n")[-1]
-            )
+        if not self.no_fewshot:
+            obj_info: str = item.features.get("object_info", None)
+            obj_info = obj_info.replace("\n", "")
+            # if not self.is_train and obj_info is not None:
+            #     prompt = INFERENCE_FINAL_PROMPT.format(
+            #         rough_description=obj_info, task_description=prompt
+            #     )
+            if not self.is_train and obj_info is not None:
+                prompt = fillin_fewshot(
+                    rough_description=obj_info, task_description=prompt.split("\n")[-1]
+                )
+            elif obj_info is not None and np.random.rand() < 0.5:
+                prompt = fillin_fewshot(
+                    rough_description=obj_info, task_description=prompt.split("\n")[-1]
+                )
         prompt = apply_chat_template(prompt)
         if self.is_train:
             prompt = f"{prompt} {item.gt}"
@@ -216,6 +239,7 @@ class RAGDataset(Dataset):
         path: Union[str, Path],
         client: MilvusClient,
         transform: Optional[Transform] = None,
+        shuffle=True,
     ):
         path = Path(path)
         img_dir = path / "images"
@@ -235,6 +259,14 @@ class RAGDataset(Dataset):
         self.obj_info = target_data
 
         self.config = config.data
+
+        self.config = [
+            item
+            for item in self.config
+            if isinstance(item.features.get("object_info", 0), int)
+        ]
+        if shuffle:
+            np.random.shuffle(self.config)
         self.prompts = config.prompts
         self.sys_prompt = (
             "You are an AI model designed to analyze traffic scenes and provide a detailed "

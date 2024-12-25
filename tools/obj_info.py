@@ -56,7 +56,7 @@ Dep_model = AutoModelForDepthEstimation.from_pretrained(
     "depth-anything/Depth-Anything-V2-Small-hf"
 ).to(device)
 
-basedir = Path("data/test")
+basedir = Path("data/val")
 
 info_store_path = basedir / "obj_info.pkl"
 
@@ -246,7 +246,7 @@ for index, gd_inputs, dp_inputs, gt, target_sizes, ids in tqdm(val_loader):
             }
         )
 
-    if "test" not in basedir.name:
+    if "test" not in basedir.name and "val" not in basedir.name:
         id_json = {}
         for idx, out in enumerate(__json_out):
             task = ids[idx].split("_")[1]

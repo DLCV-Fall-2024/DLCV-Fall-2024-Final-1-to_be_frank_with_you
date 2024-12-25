@@ -177,7 +177,7 @@ if __name__ == "__main__":
     for item in original["data"]:
         gt = item["gt"]
         modified_gt = random_replace_and_highlight(gt, replace_prob=0.7)
-        item["features"]["object_info"] = gt
+        item["features"]["object_info"] = modified_gt
 
     with open(store_path, "w") as f:
         json.dump(original, f)

@@ -130,12 +130,13 @@ def main():
     prefetch_factor = ic.prefetch_factor if num_workers > 0 else None
     from pymilvus import MilvusClient
 
-    client = MilvusClient("data/milvus_vector_copy.db")
+    client = MilvusClient("data/milvus_vector.db")
 
     dataset = RAGDataset(
         ic.dataset_path,
         client=client,
         transform=transform,
+        shuffle=True,
     )
     inference_loader = DataLoader(
         dataset,
@@ -143,6 +144,7 @@ def main():
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
         collate_fn=rag_collate_fn,
+        shuffle=True,
     )
 
     generation_config = GenerationConfig.from_dict(ic.generation_config)

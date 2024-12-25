@@ -7,16 +7,18 @@ pairs = {
         "obj_info_path": "outputs/inference/inference_first_stage/1224_222940/first_stage.json",
     },
     "train": {
-        "config_path": "data/train/config_aug.json",
+        "config_path": "data/train/config.json",
+        # "obj_info_path": "data/train/config_aug.json",
+        # "config_path": "data/train/config_aug.json",
         "obj_info_path": "outputs/inference/inference_first_stage/1225_184812/first_stage.json",
     },
     "val": {
         "config_path": "data/val/config.json",
-        "obj_info_path": "data/val/obj_info.pkl",
+        "obj_info_path": "outputs/inference/inference_first_stage_val/1226_034721/first_stage.json",
     },
 }
 
-task = "train"
+task = "val"
 config_path = pairs[task]["config_path"]
 obj_info_path = pairs[task]["obj_info_path"]
 
@@ -27,7 +29,8 @@ if obj_info_path.endswith(".json"):
     with open(obj_info_path, "r") as f:
         obj_info = json.load(f)
     for item in original["data"]:
-        item["features"]["object_info"] = obj_info[item["id"]]
+        if item["id"] in list(obj_info.keys()):
+            item["features"]["object_info"] = obj_info[item["id"]]
 
 if obj_info_path.endswith(".pkl"):
     with open(obj_info_path, "rb") as f:

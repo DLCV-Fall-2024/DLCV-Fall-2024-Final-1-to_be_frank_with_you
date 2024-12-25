@@ -136,13 +136,16 @@ class GenerateParams(ParamGroup):
     num_workers: int = 10
     prefetch_factor: int = 20
     max_new_tokens: int = 1024
+    max_tokens: int = 2048
+    no_fewshot: bool = False
+    skip_no_object_info: bool = True
     generation_config: dict = field(
         default_factory=lambda: {
             "do_sample": False,
             # "min_p": 0.01,
             # "top_k": 50,
             # "top_p": 0.9,
-            "num_beams": 2,
+            "num_beams": 1,
             # "num_beam_groups": 2,
             # "diversity_penalty": 0.5,
             "repetition_penalty": 1.5,

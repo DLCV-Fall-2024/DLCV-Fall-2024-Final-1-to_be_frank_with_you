@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+from typing import Any, Tuple
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -18,6 +19,7 @@ def main():
     parser.add_argument(
         "--name", required=True, type=str, help="Name of the config presets"
     )
+    parser.add_argument("--local_rank", type=int, required=True, help="Local rank")
     parser.add_argument(
         "--training_dir",
         required=True,
@@ -31,32 +33,12 @@ def main():
         type=str,
         help="Path to the checkpoint file (relative to training_dir/checkpoint)",
     )
-    parser.add_argument(
-        "--slice",
-        required=False,
-        default=None,
-        type=int,
-        help="Process the number slice of the dataset",
-    )
-    parser.add_argument(
-        "--total_slices",
-        required=False,
-        default=None,
-        type=int,
-        help="Number of slices of dataset to process",
-    )
 
     GenerateParams().load(parser, sentinel=True)
     args = parser.parse_args()
-    slice = args.slice
-    total_slices = args.total_slices
-
-    if isinstance(slice, int) and isinstance(total_slices, int):
-        assert slice >= 0, "Slice must be greater than or equal to 0"
-        assert total_slices > 0, "Total slices must be greater than 0"
-        assert slice < total_slices, "Slice must be less than total slices"
 
     name = args.name
+    local_rank = args.local_rank
     infer_config, _, *assets = load_config(
         GenerateParams,
         name=name,
@@ -91,13 +73,27 @@ def main():
         has_ckpt = True
 
     train_config = load_dataclass(Config, train_config_path, strict=False)
-    train_config = extract_args(train_config, args)
+    train_config: Config = extract_args(train_config, args)
     infer_config.model_config = train_config
 
     dump_config(infer_config, output_dir / "config.yaml")
     dump_config(infer_config, infer_config_path)
 
     ic = infer_config
+    dsp = infer_config.model_config.deepspeed
+
+    # Get DeepSpeed metadata
+    import deepspeed
+    from torch import distributed as dist
+
+    name = args.name
+    local_rank = args.local_rank
+
+    dist.init_process_group()
+    world_size = dist.get_world_size()
+
+    accelerator = deepspeed.get_accelerator()
+    device = f"{accelerator.device_name()}:{local_rank}"
 
     import json
     import re
@@ -105,7 +101,7 @@ def main():
     import torch
     from liger_kernel.transformers import apply_liger_kernel_to_llama
     from pytorch_lightning import seed_everything
-    from torch.utils.data import DataLoader
+    from torch.utils.data import DataLoader, DistributedSampler
     from tqdm import tqdm
     from transformers import GenerationConfig
     from transformers.utils import logging
@@ -123,17 +119,19 @@ def main():
     if train_config.liger_kernel:
         apply_liger_kernel_to_llama()
     ### DeepSpeed Compatibility ###
-    __USE_DEEPSPEED__ = False
-    local_rank = -1
+    __USE_DEEPSPEED__ = True
     use_cache = not (mp.gradient_checkpointing and not __USE_DEEPSPEED__)
 
     model = LlavaPEFT(
         model_params=mp,
         gradient_checkpointing=not use_cache,
         lora_config=mp.lora_config,
-        device=device,
+        # device=device,
         torch_dtype=torch.bfloat16,
     )
+    # TODO: Use zero3's reduction instead
+    if "zero_optimization" in dsp.config:
+        dsp.config.pop("zero_optimization")
 
     # Check if checkpoint exists
     if has_ckpt:
@@ -155,7 +153,7 @@ def main():
 
     for param in model.parameters():
         param.requires_grad = False
-    model.to(device, torch.bfloat16)
+    # model.to(device, torch.bfloat16)
 
     timer = Timer(10 * 60)  # 10 minutes
     transform = model.transform
@@ -170,16 +168,20 @@ def main():
         use_processed=mp.use_processed,
         depth_model_id=mp.depth_model_id,
         segmentation_model_id=mp.segmentation_model_id,
-        slice=slice,
-        total_slices=total_slices,
-        skip_no_object_info=ic.skip_no_object_info,
-        no_fewshot=ic.no_fewshot,
+        skip_no_object_info=True,
+    )
+    sampler = DistributedSampler(
+        dataset,
+        num_replicas=world_size,
+        rank=local_rank,
+        shuffle=False,
     )
     inference_loader = DataLoader(
         dataset,
         batch_size=ic.batch_size,
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
+        sampler=sampler,
         collate_fn=collate_fn,
     )
 
@@ -196,10 +198,26 @@ def main():
     out_path = output_dir / "submission.json"
 
     data = {}
-    timer = Timer(5 * 60)  # 10 minutes
+    timer = Timer(10 * 60)  # 10 minutes
     DEBUG = PerformanceMonitor(True)
-    model.eval()
+
+    def initialize_model(model) -> deepspeed.InferenceEngine:
+        model_engine = deepspeed.init_inference(
+            model=model,
+            tensor_parallel={"tp_size": world_size},
+            dtype=torch.bfloat16,
+            max_tokens=ic.max_tokens,
+            replace_with_kernel_inject=True,
+        )
+        model_engine: deepspeed.InferenceEngine
+        return model_engine
+
+    model.finetune_language(train_config.finetune_language)
     model = model.merge_and_unload(inplace=True)
+
+    model_engine = initialize_model(model)
+    model_engine.eval()
+
     for ids, batch in tqdm(inference_loader):
         with DEBUG:
             target_dtypes = [torch.float16, torch.float32, torch.float64]
@@ -217,7 +235,7 @@ def main():
             DEBUG.set_params(**{"ids": ids})
 
             with torch.no_grad():
-                output = model.generate(
+                output = model_engine.generate(
                     **inputs,
                     max_new_tokens=ic.max_new_tokens,
                     generation_config=generation_config,
