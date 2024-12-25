@@ -1,6 +1,6 @@
-from dataclasses import dataclass, field
-from typing import Optional, Dict, List
 from argparse import ArgumentParser
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
 
 from src.arguments import ParamGroup
 
@@ -10,6 +10,7 @@ class ModelParams(ParamGroup):
     model_id: str = "llava-hf/llava-1.5-7b-hf"
     encoder_id: str = "facebook/dinov2-large"
 
+    only_clip: bool = False
     use_clip: bool = False
     interpolation_mode: str = "bilinear"
 
@@ -131,18 +132,28 @@ class GenerateParams(ParamGroup):
     dataset_path: str = "data/test"
 
     seed: int = 42
-    batch_size: int = 4
+    batch_size: int = 2
     num_workers: int = 10
     prefetch_factor: int = 20
     max_new_tokens: int = 1024
     generation_config: dict = field(
         default_factory=lambda: {
             "do_sample": False,
+            # "min_p": 0.01,
+            # "top_k": 50,
+            # "top_p": 0.9,
+            "num_beams": 2,
+            # "num_beam_groups": 2,
+            # "diversity_penalty": 0.5,
+            "repetition_penalty": 1.5,
+            "encoder_repetition_penalty": 1.5,
+            "no_repeat_ngram_size": 4,
         }
     )
     use_regex: bool = True
 
-    model_path: Optional[str] = None
+    training_dir: Optional[str] = None
+    ckpt_path: Optional[str] = None
     model_config: Config = field(default_factory=Config)
 
     def load(self, parser: ArgumentParser, sentinel: bool = False):

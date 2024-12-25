@@ -26,7 +26,8 @@ def main():
     )
     parser.add_argument(
         "--ckpt_path",
-        required=True,
+        required=False,
+        default=None,
         type=str,
         help="Path to the checkpoint file (relative to training_dir/checkpoint)",
     )
@@ -58,11 +59,15 @@ def main():
 
     train_config_path = training_dir / "config.yaml"
     assert train_config_path.exists(), f"Train config not found at {train_config_path}"
+    infer_config.training_dir = str(training_dir)
 
     # Check if checkpoint exists
-    model_path = training_dir / "checkpoint" / args.ckpt_path
-    assert model_path.exists(), f"Checkpoint not found at {model_path}"
-    infer_config.model_path = str(model_path)
+    has_ckpt = False
+    if args.ckpt_path is not None:
+        model_path: Path = training_dir / "checkpoint" / args.ckpt_path
+        assert model_path.exists(), f"Checkpoint not found at {model_path}"
+        infer_config.ckpt_path = str(model_path)
+        has_ckpt = True
 
     train_config = load_dataclass(Config, train_config_path, strict=False)
     train_config = extract_args(train_config, args)
@@ -86,7 +91,7 @@ def main():
 
     from src.models.llava import LlavaPEFT, collate_fn
     from src.utils.dataset import DiscDataset
-    from src.utils.log import PerformanceMonitor, Timer, pretty_print
+    from src.utils.log import PerformanceMonitor, Timer, pretty_print, print_once
 
     logging.set_verbosity_error()
     mp = train_config.model
@@ -108,16 +113,21 @@ def main():
         device=device,
         torch_dtype=torch.bfloat16,
     )
-    print("Loading model from checkpoint: ", model_path)
-    ckpt = torch.load(open(model_path, "rb"), map_location=device)
-    if "ds_version" in ckpt.keys():
-        print("Loading DeepSpeed checkpoint")
-        model.load_state_dict(ckpt["module"])
+
+    # Check if checkpoint exists
+    if has_ckpt:
+        print("Loading model from checkpoint: ", model_path)
+        ckpt = torch.load(open(model_path, "rb"), map_location=device)
+        if "ds_version" in ckpt.keys():
+            print("Loading DeepSpeed checkpoint")
+            model.load_state_dict(ckpt["module"])
+        else:
+            # TODO: Make sure this is correct
+            print("Loading normal checkpoint")
+            model.load_state_dict(ckpt)
+        print("Model loaded successfully")
     else:
-        # TODO: Make sure this is correct
-        print("Loading normal checkpoint")
-        model.load_state_dict(ckpt)
-    print("Model loaded successfully")
+        print("Not using checkpoint. Using default model.")
 
     transform = model.transform
     processor = model.processor
@@ -202,6 +212,7 @@ def main():
                     parts = text[idx].split("ASSISTANT:", 1)
                     assistant_reply = parts[1].strip() if len(parts) > 1 else ""
                 data[item] = assistant_reply
+                print_once(assistant_reply)
                 res_len.append(len(assistant_reply))
 
             DEBUG.set_params(**{"assistant_reply": sum(res_len) / len(res_len)})

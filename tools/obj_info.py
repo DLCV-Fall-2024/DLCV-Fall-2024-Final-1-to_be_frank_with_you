@@ -29,7 +29,7 @@ from transformers import (
 from src.utils import container_to
 from src.utils.dataset import BoxInfoPreProcessorDataset, preprocessor_collate_fn
 
-batch_size = 8
+batch_size = 16
 prefetch_factor = 8
 num_workers = 10
 collate_fn = preprocessor_collate_fn
@@ -179,7 +179,7 @@ if "test" not in basedir.name:
             client.create_collection(
                 collection_name=collection_name,
                 dimension=1024,  # The vectors we will use in this demo has 768 dimensions
-                metric_type="IP",
+                metric_type="L2",
                 consistency_level="Strong",
                 auto_id=True,
             )
@@ -247,6 +247,7 @@ for index, gd_inputs, dp_inputs, gt, target_sizes, ids in tqdm(val_loader):
         )
 
     if "test" not in basedir.name:
+        id_json = {}
         for idx, out in enumerate(__json_out):
             task = ids[idx].split("_")[1]
             collection_name = f"{base_collection_name}_{task}"
@@ -254,10 +255,7 @@ for index, gd_inputs, dp_inputs, gt, target_sizes, ids in tqdm(val_loader):
                 collection_name=collection_name,
                 data=[out],
             )
-
-        id_json = {}
-        for i in range(len(res["ids"])):
-            id_json[index[i]] = res["ids"][i]
+            id_json[out["image_path"]] = res["ids"][0]
     else:
         id_json = {}
         for i in range(len(__json_out)):

@@ -82,15 +82,9 @@ def main():
     dsp.config.pop("zero_optimization")
 
     model_struct = {"model_struct": model.get_model_struct()}
-    trainable_params = {
-        "tranable_params": [
-            name for name, param in model.named_parameters() if param.requires_grad
-        ]
-    }
     
     dump_config(config, output_dir / "config.yaml")
     dump_config(model_struct, output_dir / "model_struct.yaml")
-    dump_config(trainable_params, output_dir / "trainable_params.yaml")
 
     transform = model.transform
     processor = model.processor
@@ -232,6 +226,13 @@ def main():
         return model_engine, scheduler
 
     model.finetune_language(config.finetune_language)
+    trainable_params = {
+        "tranable_params": [
+            name for name, param in model.named_parameters() if param.requires_grad
+        ]
+    }
+    dump_config(trainable_params, output_dir / "trainable_params.yaml")
+
     model_engine, scheduler = initialize_model(model)
 
     if config.resume:

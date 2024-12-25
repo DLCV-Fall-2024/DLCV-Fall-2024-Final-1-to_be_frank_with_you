@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union, cast
 
+import numpy as np
 import PIL
 import PIL.Image
 import typer
@@ -14,7 +15,8 @@ from torchvision import transforms
 from tqdm import tqdm
 
 from src.utils import batch_feature_to_dict, container_cat, default, pad_sequences
-from src.utils.prompt import INFERENCE_FINAL_PROMPT
+from src.utils.log import print_once
+from src.utils.prompt import INFERENCE_FINAL_PROMPT, fillin_fewshot
 
 PADDING_TOKEN = 32001
 ATTENTION_MASK = 0
@@ -150,16 +152,25 @@ class DiscDataset(Dataset):
         if isinstance(prompt, int):
             prompt = self.prompts[prompt]
 
-        obj_info = item.features.get("object_info", None)
+        obj_info: str = item.features.get("object_info", None)
+        obj_info = obj_info.replace("\n", "")
+        # if not self.is_train and obj_info is not None:
+        #     prompt = INFERENCE_FINAL_PROMPT.format(
+        #         rough_description=obj_info, task_description=prompt
+        #     )
         if not self.is_train and obj_info is not None:
-            prompt = INFERENCE_FINAL_PROMPT.format(
-                rough_description=obj_info, task_description=prompt
+            prompt = fillin_fewshot(
+                rough_description=obj_info, task_description=prompt.split("\n")[-1]
             )
-
+        elif obj_info is not None and np.random.rand() < 0.5:
+            prompt = fillin_fewshot(
+                rough_description=obj_info, task_description=prompt.split("\n")[-1]
+            )
         prompt = apply_chat_template(prompt)
         if self.is_train:
             prompt = f"{prompt} {item.gt}"
 
+        # print_once(f"Prompt: {prompt}")
         image = PIL.Image.open(item.img_path).convert("RGB")
 
         processed_images = {}
@@ -233,7 +244,7 @@ class RAGDataset(Dataset):
         self.usr_prompt = (
             "Now, analyze the following scene:\n\n"
             "Objects: {objects_text}\n"
-            "Based on this information, generate a response similar to the example above"
+            "Based on this information, generate a response similar to the example above. Note that the response should use position instead of bbox."
         )
 
         self.client = client
@@ -250,15 +261,23 @@ class RAGDataset(Dataset):
         if isinstance(prompt, int):
             prompt = self.prompts[prompt]
 
-        my_info = self.obj_info[img_path]["object_info"]
+        collection_name = f"object_info_{id.split("_")[1]}"
+        my_info = self.obj_info[img_path]
+        if not isinstance(my_info, dict):
+            my_info = self.client.get(
+                collection_name,
+                ids=[my_info],
+            )
+            my_info = my_info[0]
 
         res = self.client.search(
-            f"object_info_{id.split("_")[1]}",
-            data=[self.obj_info[img_path]["vector"]],
+            collection_name,
+            data=[my_info["vector"]],
             limit=2,
             output_fields=["text", "object_info", "image_path"],
         )
         res = res[0]
+        my_info = my_info["object_info"]
         raw_prompt = [{"role": "system", "prompt": self.sys_prompt}]
         for item in res:
             raw_prompt.append(

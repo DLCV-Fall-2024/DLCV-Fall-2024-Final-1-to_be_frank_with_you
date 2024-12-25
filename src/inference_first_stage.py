@@ -62,7 +62,7 @@ def main():
     # train_config = extract_args(train_config, args)
     # infer_config.model_config = train_config
     # infer_config.model_path = args.training_dir
-    
+
     dump_config(infer_config, output_dir / "config.yaml")
     dump_config(infer_config, infer_config_path)
 
@@ -81,7 +81,7 @@ def main():
 
     from src.models.llava import LlavaPEFT
     from src.utils.dataset import DiscDataset, RAGDataset, rag_collate_fn
-    from src.utils.log import PerformanceMonitor, Timer, pretty_print, Profiler
+    from src.utils.log import PerformanceMonitor, Profiler, Timer, pretty_print
 
     logging.set_verbosity_error()
 
@@ -130,7 +130,7 @@ def main():
     prefetch_factor = ic.prefetch_factor if num_workers > 0 else None
     from pymilvus import MilvusClient
 
-    client = MilvusClient("data/milvus_vector.db")
+    client = MilvusClient("data/milvus_vector_copy.db")
 
     dataset = RAGDataset(
         ic.dataset_path,
@@ -170,7 +170,7 @@ def main():
                 ids, batch = next(iterator)
             except StopIteration:
                 break
-        
+
         PROFILER.export(output_dir / "trace.json")
 
         with DEBUG:
@@ -187,7 +187,6 @@ def main():
 
             with torch.no_grad():
                 output = model.generate(
-                    
                     **inputs,
                     max_new_tokens=ic.max_new_tokens,
                     generation_config=generation_config,
@@ -214,11 +213,9 @@ def main():
             timer.restart()
             with open(out_path, "w") as json_file:
                 json.dump(data, json_file)
-        
-    
+
     with open(out_path, "w") as json_file:
         json.dump(data, json_file)
-
 
 
 if __name__ == "__main__":

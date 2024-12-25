@@ -40,39 +40,41 @@ class LlavaPEFT(torch.nn.Module):
             model_params.vision_feature_select_strategy
         )
 
-        # Change the vision tower to the encoder
-        vision_feature_layer = default(llava.config.vision_feature_layer, -2)
-        self.conditional_fuser = model_params.conditional_fuser
-        self.condition_dropout = model_params.condition_dropout
-        language_embeds_dim = llava.get_input_embeddings().weight.shape[1]
+        self.only_clip = model_params.only_clip
+        if not self.only_clip:
+            # Change the vision tower to the encoder
+            vision_feature_layer = default(llava.config.vision_feature_layer, -2)
+            self.conditional_fuser = model_params.conditional_fuser
+            self.condition_dropout = model_params.condition_dropout
+            language_embeds_dim = llava.get_input_embeddings().weight.shape[1]
 
-        self.use_clip = model_params.use_clip
-        clip_encoder = None
-        if self.use_clip:
-            clip_encoder = VisionEncoder(
-                model=llava.vision_tower.vision_model,
-                processor=processor.image_processor,
+            self.use_clip = model_params.use_clip
+            clip_encoder = None
+            if self.use_clip:
+                clip_encoder = VisionEncoder(
+                    model=llava.vision_tower.vision_model,
+                    processor=processor.image_processor,
+                )
+
+            self.vision_tower = VisionTower(
+                model_params,
+                clip_encoder=clip_encoder,
+                vision_feature_layer=vision_feature_layer,
+                language_embeds_dim=language_embeds_dim,
+                torch_dtype=torch_dtype,
+                device=device,
             )
+            llava.vision_tower = self.vision_tower
 
-        self.vision_tower = VisionTower(
-            model_params,
-            clip_encoder=clip_encoder,
-            vision_feature_layer=vision_feature_layer,
-            language_embeds_dim=language_embeds_dim,
-            torch_dtype=torch_dtype,
-            device=device,
-        )
-        llava.vision_tower = self.vision_tower
-
-        # Update vision related config if not use clip
-        if not self.use_clip:
-            llava.config.vision_config = self.vision_tower.encoder.model.config
-            llava.config.image_seq_length = (
-                self.vision_tower.encoder_patch_width
-                * self.vision_tower.encoder_patch_height
-            )
-            processor.image_processor = self.vision_tower.encoder.processor
-            processor.patch_size = self.vision_tower.encoder_patch_size
+            # Update vision related config if not use clip
+            if not self.use_clip:
+                llava.config.vision_config = self.vision_tower.encoder.model.config
+                llava.config.image_seq_length = (
+                    self.vision_tower.encoder_patch_width
+                    * self.vision_tower.encoder_patch_height
+                )
+                processor.image_processor = self.vision_tower.encoder.processor
+                processor.patch_size = self.vision_tower.encoder_patch_size
 
         # Remove projector layers from lora for direct finetuning
         self.no_lora_but_FF_prefix = default(
@@ -128,7 +130,7 @@ class LlavaPEFT(torch.nn.Module):
             do_rescale=True,
         )
 
-        if img is not None:
+        if not self.only_clip and img is not None:
             image_inputs = self.vision_tower.processor(
                 img,
                 processed_images=processed_images,
@@ -153,6 +155,10 @@ class LlavaPEFT(torch.nn.Module):
         aux_inputs: Optional[List[Dict[str, Any]]] = None,
         **inputs,
     ):
+        if self.only_clip:
+            inputs["pixel_values"] = pixel_values
+            return self.llava(**inputs)
+
         if aux_inputs is not None:
             inputs["pixel_values"] = [pixel_values, clip_inputs, *aux_inputs]
         else:
@@ -222,6 +228,9 @@ class LlavaPEFT(torch.nn.Module):
         clip_inputs: Dict[str, Any] = None,
         **inputs,
     ):
+        if self.only_clip:
+            inputs["pixel_values"] = pixel_values
+            return self.llava.generate(**inputs)
 
         if aux_inputs is not None and clip_inputs is not None:
             inputs["pixel_values"] = [pixel_values, clip_inputs, *aux_inputs]

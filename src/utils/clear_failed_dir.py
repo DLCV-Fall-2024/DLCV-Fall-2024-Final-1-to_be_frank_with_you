@@ -25,6 +25,13 @@ if __name__ == "__main__":
         to_delete = not ckpt_dir.exists()
         if ckpt_dir.exists():
             to_delete = not any(ckpt_dir.glob("*.pt"))
+
+            if to_delete:
+                for _dir in ckpt_dir.iterdir():
+                    if _dir.is_dir():
+                        to_delete = not any(_dir.glob("*.pt"))
+                        if not to_delete:
+                            break
         if to_delete:
             print(f"Deleting {dir}")
             delete_dir(dir)
