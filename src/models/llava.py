@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import torch
-from peft import LoraConfig, PeftMixedModel, get_peft_model
+from peft import LoraConfig, PeftMixedModel, get_peft_model, LoraRuntimeConfig
 from PIL.Image import Image
 from transformers import LlavaForConditionalGeneration, LlavaProcessor
 
@@ -102,13 +102,20 @@ class LlavaPEFT(torch.nn.Module):
             llava.gradient_checkpointing_enable({"use_reentrant": True})
 
         # Apply LoRA
-        lora_config = LoraConfig(**lora_config)
+        lora_config = LoraConfig(**lora_config, runtime_config=LoraRuntimeConfig(ephemeral_gpu_offload=True))
         self.llava: PeftMixedModel = get_peft_model(llava, lora_config)
         self.processor = processor
 
         self.activate_only_lora()
         # Activate finetuning the encoder
         for name, param in llava.named_parameters():
+            if any([prefix in name for prefix in self.no_lora_but_FF_prefix]):
+                param.requires_grad = True
+
+    def setup_requires_grad(self):
+        self.activate_only_lora()
+        # Activate finetuning the encoder
+        for name, param in self.llava.named_parameters():
             if any([prefix in name for prefix in self.no_lora_but_FF_prefix]):
                 param.requires_grad = True
 
@@ -151,7 +158,7 @@ class LlavaPEFT(torch.nn.Module):
     def forward(
         self,
         pixel_values: torch.Tensor,
-        clip_inputs: Dict[str, Any],
+        clip_inputs: Optional[Dict[str, Any]] = None,
         aux_inputs: Optional[List[Dict[str, Any]]] = None,
         **inputs,
     ):

@@ -86,9 +86,13 @@ def main():
     has_ckpt = False
     if args.ckpt_path is not None:
         model_path: Path = training_dir / "checkpoint" / args.ckpt_path
-        assert model_path.exists(), f"Checkpoint not found at {model_path}"
-        infer_config.ckpt_path = str(model_path)
-        has_ckpt = True
+        # assert model_path.exists(), f"Checkpoint not found at {model_path}"
+        if not model_path.exists():
+            print(f"Checkpoint not found at {model_path}")
+            model_path = None
+        else:
+            infer_config.ckpt_path = str(model_path)
+            has_ckpt = True
 
     train_config = load_dataclass(Config, train_config_path, strict=False)
     train_config = extract_args(train_config, args)
@@ -157,7 +161,7 @@ def main():
         param.requires_grad = False
     model.to(device, torch.bfloat16)
 
-    timer = Timer(10 * 60)  # 10 minutes
+    timer = Timer(60)  # 10 minutes
     transform = model.transform
 
     num_workers = ic.num_workers
@@ -193,7 +197,16 @@ def main():
     print()
     # Perform inference
 
-    out_path = output_dir / "submission.json"
+    out_path = (
+        output_dir.parent
+        / f"{training_dir.parent.name}_{training_dir.name}"
+        / str(args.slice)
+        / "submission.json"
+    )
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Saving output to {out_path}")
+    # out_path = output_dir / "submission.json"
 
     data = {}
     timer = Timer(5 * 60)  # 10 minutes
@@ -246,10 +259,12 @@ def main():
         if timer.timesup():
             ## Save the results every 10 minutes
             timer.restart()
+            print(f"Saving output to {out_path}")
             with open(out_path, "w") as json_file:
                 json.dump(data, json_file)
     with open(out_path, "w") as json_file:
         json.dump(data, json_file)
+    print(f"Saving output to {out_path}")
 
 
 if __name__ == "__main__":

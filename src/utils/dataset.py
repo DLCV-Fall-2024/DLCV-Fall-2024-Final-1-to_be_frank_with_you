@@ -10,6 +10,7 @@ import typer
 from dataclasses_json import dataclass_json
 from datasets import load_dataset
 from PIL.Image import Image
+from pymilvus import MilvusClient
 from torch.utils.data import Dataset
 from torchvision import transforms
 from tqdm import tqdm
@@ -59,6 +60,7 @@ class DiscDataset(Dataset):
         slice: Optional[int] = None,
         total_slices: Optional[int] = None,
         no_fewshot: bool = False,
+        client: MilvusClient = None,
     ):
         path = Path(path)
         img_dir = path / "images"
@@ -161,6 +163,25 @@ class DiscDataset(Dataset):
             )
         self.no_fewshot = no_fewshot
 
+        self.client = client
+        if self.client is not None:
+            obj_path = path / "obj_info.pkl"
+
+            with open(obj_path, "rb") as f:
+                target_data = pickle.load(f)
+
+            self.obj_info = target_data
+            self.raw_sys_prompt = (
+                "You are an AI model designed to analyze traffic scenes and provide a detailed "
+                "interpretation of the image based on provided detected objects information.\n\n"
+                "Below are examples:\n\n"
+            )
+            self.raw_usr_prompt = (
+                "Now, analyze the following scene:\n\n"
+                "Objects: {objects_text}\n"
+                "Based on this information, generate a response similar to the example above. Note that the response should use position instead of bbox."
+            )
+
     def __len__(self):
         return len(self.config)
 
@@ -171,25 +192,65 @@ class DiscDataset(Dataset):
         item = self.config[idx]
 
         prompt = item.prompt
+        id = item.id
+        img_path = item.img_path
         if isinstance(prompt, int):
             prompt = self.prompts[prompt]
 
-        if not self.no_fewshot:
+        if self.client is not None:
+            collection_name = f"object_info_{id.split("_")[1]}"
+            my_info = self.obj_info[img_path]
+            if not isinstance(my_info, dict):
+                my_info = self.client.get(
+                    collection_name,
+                    ids=[my_info],
+                )
+                my_info = my_info[0]
+
+            res = self.client.search(
+                collection_name,
+                data=[my_info["vector"]],
+                limit=2,
+                output_fields=["text", "object_info", "image_path"],
+            )
+            res = res[0]
+            my_info = my_info["object_info"]
+            ##
+            raw_prompt = [{"role": "system", "prompt": self.sys_prompt}]
+            for item in res:
+                raw_prompt.append(
+                    {
+                        "role": "user",
+                        "prompt": f"Objects: {item["entity"]["object_info"]}",
+                    }
+                )
+                raw_prompt.append(
+                    {"role": "assistant", "prompt": item["entity"]["text"]}
+                )
+            raw_prompt.append(
+                {"role": "user", "prompt": self.usr_prompt.format(objects_text=my_info)}
+            )
+            prompt = apply_chat_template(raw_prompt)
+        else:
             obj_info: str = item.features.get("object_info", None)
-            obj_info = obj_info.replace("\n", "")
-            # if not self.is_train and obj_info is not None:
-            #     prompt = INFERENCE_FINAL_PROMPT.format(
-            #         rough_description=obj_info, task_description=prompt
-            #     )
-            if not self.is_train and obj_info is not None:
-                prompt = fillin_fewshot(
-                    rough_description=obj_info, task_description=prompt.split("\n")[-1]
-                )
-            elif obj_info is not None and np.random.rand() < 0.5:
-                prompt = fillin_fewshot(
-                    rough_description=obj_info, task_description=prompt.split("\n")[-1]
-                )
-        prompt = apply_chat_template(prompt)
+            if not self.no_fewshot and obj_info is not None:
+                if isinstance(obj_info, str):
+                    obj_info = obj_info.replace("\n", "")
+                    # if not self.is_train and obj_info is not None:
+                    #     prompt = INFERENCE_FINAL_PROMPT.format(
+                    #         rough_description=obj_info, task_description=prompt
+                    #     )
+                    if not self.is_train:
+                        prompt = fillin_fewshot(
+                            rough_description=obj_info,
+                            task_description=prompt.split("\n")[-1],
+                        )
+                    elif np.random.rand() < 0.5:
+                        prompt = fillin_fewshot(
+                            rough_description=obj_info,
+                            task_description=prompt.split("\n")[-1],
+                        )
+            prompt = apply_chat_template(prompt)
         if self.is_train:
             prompt = f"{prompt} {item.gt}"
 
@@ -252,6 +313,7 @@ class RAGDataset(Dataset):
 
         with open(config_path, "r") as f:
             config = cast(DiscDatasetConfig, DiscDatasetConfig.from_json(f.read()))
+        obj_path = path / "obj_info.pkl"
 
         with open(obj_path, "rb") as f:
             target_data = pickle.load(f)

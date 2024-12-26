@@ -13,6 +13,10 @@ class ModelParams(ParamGroup):
     model_id: str = "llava-hf/llava-1.5-7b-hf"
     encoder_id: str = "facebook/dinov2-large"
 
+    only_clip: bool = False
+    use_clip: bool = False
+    interpolation_mode: str = "bilinear"
+
     share_vit: bool = False
     use_processed: bool = True
 

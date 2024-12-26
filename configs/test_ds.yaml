@@ -1,14 +1,18 @@
+seed: 42
+debug: false
+profile: false
+liger_kernel: true
+wandb: false
 project_name: null
 run_name: null
-seed: 42
-local_rank: -1
-liger_kernel: true
-resume: "outputs/DINO_r256_epoch_1_1_1216_134636/checkpoint/latest.pt"
+finetune_language: true
+resume: null
+resume_tag: null
 model:
-  device: cuda
   model_id: llava-hf/llava-1.5-7b-hf
   encoder_id: facebook/dinov2-large
   share_vit: false
+  use_processed: true
   use_depth: true
   depth_model_id: depth-anything/Depth-Anything-V2-Small-hf
   use_segmentation: true
@@ -21,7 +25,7 @@ model:
   - fuser
   - vision_tower.AdaLNZero
   - auxiliary_projectors
-  patch_size: 14
+  vision_feature_interpolation: true
   vision_feature_select_strategy: full
   gradient_checkpointing: true
   lora_config:
@@ -38,19 +42,31 @@ model:
     use_dora: true
     bias: none
     task_type: CAUSAL_LM
-pipeline:
-  wandb: true
-  debug: false
 dataset:
   dataset_path: data
-  # seed: 42
-  num_workers: 10
-  prefetch_factor: 2
-optimization:
-  epochs: 2
-  lr: 0.0003
+  num_workers: 20
+  prefetch_factor: 40
+deepspeed:
+  epochs: 1
+  learning_rate: 3.0e-05
   batch_size: 4
-  optimizer_type: default
   accumulation_steps: 4
-  gradient_clip_val: 1.0
-  train_language_start_epoch: 1
+  config:
+    gradient_clipping: 1.0
+    bf16:
+      enabled: true
+    flops_profiler:
+      enabled: false
+      detailed: false
+    zero_optimization:
+      stage: 2
+      offload_optimizer:
+        device: cpu
+        pin_memory: true
+      allgather_partitions: true
+      allgather_bucket_size: 500000000.0
+      overlap_comm: true
+      reduce_scatter: true
+      reduce_bucket_size: 500000000.0
+      contiguous_gradients: true
+      round_robin_gradients: true

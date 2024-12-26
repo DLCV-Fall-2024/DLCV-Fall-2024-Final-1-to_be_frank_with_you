@@ -1,19 +1,22 @@
 import json
 import pickle
 
+arch = "default_1226_084508"
+
 pairs = {
-    "test": {
-        "config_path": "data/test/config.json",
-        "obj_info_path": "outputs/inference/inference_first_stage/1224_222940/first_stage.json",
+    "fs": {
+        "path1": f"outputs/inference/inference_val_fs/{arch}/0/submission.json",
+        "path2": f"outputs/inference/inference_val_fs/{arch}/1/submission.json",
+        "store_path": f"outputs/inference/merged/{arch}_rag/submission.json",
     },
-    "val": {
-        "path1": "outputs/inference/inference_direct_val/1226_055740/submission.json",
-        "path2": "outputs/inference/inference_direct_val/1226_055745/submission.json",
-        "store_path": "outputs/inference/merged/1_1_direct/submission.json",
+    "direct": {
+        "path1": f"outputs/inference/inference_val_direct/{arch}/0/submission.json",
+        "path2": f"outputs/inference/inference_val_direct/{arch}/1/submission.json",
+        "store_path": f"outputs/inference/merged/{arch}_direct/submission.json",
     },
 }
 
-task = "val"
+task = "fs"
 path1 = pairs[task]["path1"]
 path2 = pairs[task]["path2"]
 store_path = pairs[task]["store_path"]

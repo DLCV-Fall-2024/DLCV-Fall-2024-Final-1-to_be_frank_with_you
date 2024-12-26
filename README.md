@@ -1,14 +1,79 @@
 # DLCV Final Project
 
 # How to run your code?
-* TODO: Please provide the scripts for TAs to reproduce your results, including training and inference. For example, 
+
+1. Install requirements and fix library bugs
+
+```bash
+pip3 install -r ./requirements.txt
+pip3 install natten==0.17.3+torch250cu124 -f https://shi-labs.com/natten/wheels/
+```
+
+Inside the `site-packages` of the current python environment, go to `transformers/models/dinat/modeling_dinat.py` and replace the following lines
+
+```python
+if is_natten_available():
+    from natten.functional import natten2dav, natten2dqkrpb
+else:
+    ...
+```
+
+with
+
+```python
+if is_natten_available():
+    # from natten.functional import natten2dav, natten2dqkrpb
+    from natten.functional import na2d_av 
+    natten2dav = lambda attn, value, kernel_size, dilation: na2d_av(attn, value, kernel_size, dilation)
+    from natten.functional import na2d_qk
+    natten2dqkrpb  = lambda query, key, rpb, kernel_size, dilation: na2d_qk(query, key, kernel_size, dilation, rpb=rpb)
+else:
+    ...
+```
+
+2. Download and preprocess dataset
+
+```bash
+python -m src.utils.dataset preprocess --split test
+```
+
+3. Retrieve object info and prepare RAG database
+
+```bash
+## Please give the path which contains the whole dataset (train, val, test) or these splits itself
+python -m tools.obj_info --dataset_path <dataset_path>
+```
+
+4. Prepare Parsed RAG data
+
+```bash
+python -m src.inference_first_stage --name inference_first_stage
+```
+
+4. Download weights and configuration files
+
+Download all from [submission](https://drive.google.com/drive/folders/1JJZPnBtFHGs56IBBt5X6baq0r8bfcPAj?usp=sharing) by running:
+
+```bash
+bash download_submission.sh
+```
+
+The downloaded files should look like
 
 ```
-bash train.sh <Path to gt image folder> <Path to annot file>
-bash inference.sh <Path to gt image folder> <Path to annot file> <Path to predicted file>
+submission/
+├── checkpoint/
+│   └── latest.pt
+└── config.yaml
 ```
 
-You can add more arguments to the script if you need.
+4. Inference
+
+```bash
+python -m src.inference --name submission --training_dir submission --ckpt_path latest.pt
+```
+
+The results should be in `outputs/inference/<TODO>/<LAST_TIMESTAMP>/submission.json
 
 # Usage
 To start working on this final project, you should clone this repository into your local machine by the following command:

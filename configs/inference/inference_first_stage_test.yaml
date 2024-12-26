@@ -1,0 +1,75 @@
+config_path: null
+output_dir: null
+dataset_path: data/test
+seed: 42
+batch_size: 2
+num_workers: 10
+prefetch_factor: 20
+max_new_tokens: 1024
+generation_config:
+  do_sample: false
+  num_beams: 2
+  repetition_penalty: 1.5
+  encoder_repetition_penalty: 1.5
+  no_repeat_ngram_size: 4
+use_regex: true
+training_dir: null
+ckpt_path: null
+model_config:
+  seed: 42
+  debug: false
+  profile: false
+  liger_kernel: true
+  wandb: true
+  project_name: null
+  run_name: null
+  finetune_language: true
+  resume: null
+  resume_tag: null
+  model:
+    model_id: llava-hf/llava-1.5-7b-hf
+    encoder_id: facebook/dinov2-large
+    only_clip: false
+    use_clip: false
+    interpolation_mode: bilinear
+    share_vit: false
+    use_processed: true
+    use_depth: true
+    depth_model_id: depth-anything/Depth-Anything-V2-Small-hf
+    use_segmentation: true
+    segmentation_model_id: shi-labs/oneformer_ade20k_dinat_large
+    fuser_id: gemini
+    conditional_fuser: true
+    condition_dropout: 0.3
+    no_lora_but_FF_prefix:
+      - multi_modal_projector
+      - fuser
+      - vision_tower.AdaLNZero
+      - vision_tower.AdaLNZeroCLIP
+      - auxiliary_projectors
+    vision_feature_select_strategy: full
+    gradient_checkpointing: true
+    lora_config:
+      r: 256
+      lora_alpha: 16
+      use_rslora: true
+      target_modules:
+        - q_proj
+        - v_proj
+        - multi_modal_projector.linear_1
+        - multi_modal_projector.linear_2
+      exclude_modules: vision_tower.*
+      lora_dropout: 0.3
+      use_dora: true
+      bias: none
+      task_type: CAUSAL_LM
+  dataset:
+    dataset_path: data
+    num_workers: 20
+    prefetch_factor: 40
+  deepspeed:
+    epochs: 1
+    learning_rate: 3.0e-05
+    batch_size: 4
+    accumulation_steps: 4
+    config: {}

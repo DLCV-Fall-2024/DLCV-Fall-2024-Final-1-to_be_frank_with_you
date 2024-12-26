@@ -34,6 +34,8 @@ DEFAULT_APIKEY_INDEX = 0
 keyset = [
     "AIzaSyB_SYEFd1eUJ8c7oSegDJqV8wuwSnivag0",
     "AIzaSyAYkDEUl2WCF0mdeFXj-1x91F5hUyUCHJY",
+    "AIzaSyD3viUHqV292FrySvt7q0PKNmz50HXHyaI",
+    "AIzaSyC5pcW_zaDHuHvw7KVOnwMNtu9_glTviOE",
 ]
 
 
@@ -82,7 +84,7 @@ if __name__ == "__main__":
 
     from tqdm import tqdm
 
-    time_limit = 30
+    time_limit = 10
     s_time = time.time()
     for data in tqdm(reference):
         sample_id = data["id"]

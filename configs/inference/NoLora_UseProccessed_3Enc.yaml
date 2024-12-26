@@ -1,0 +1,69 @@
+config_path: null
+output_dir: null
+dataset_path: data/test
+seed: 42
+batch_size: 4
+num_workers: 10
+prefetch_factor: 20
+max_new_tokens: 1024
+generation_config:
+  do_sample: false
+use_regex: true
+model_config:
+  project_name: null
+  run_name: null
+  seed: 42
+  local_rank: -1
+  liger_kernel: true
+  model:
+    device: cuda
+    model_id: llava-hf/llava-1.5-7b-hf
+    encoder_id: facebook/dinov2-large
+    share_vit: false
+    use_processed: false
+    use_depth: true
+    depth_model_id: depth-anything/Depth-Anything-V2-Small-hf
+    use_segmentation: true
+    segmentation_model_id: shi-labs/oneformer_ade20k_dinat_large
+    fuser_id: gemini
+    conditional_fuser: true
+    condition_dropout: 0.3
+    no_lora_but_FF_prefix:
+      - multi_modal_projector
+      - fuser
+      - vision_tower.AdaLNZero
+      - auxiliary_projectors
+    patch_size: 14
+    vision_feature_select_strategy: full
+    gradient_checkpointing: true
+    lora_config:
+      r: 256
+      lora_alpha: 16
+      target_modules:
+        - q_proj
+        - v_proj
+        - multi_modal_projector.linear_1
+        - multi_modal_projector.linear_2
+      exclude_modules: vision_tower.*
+      lora_dropout: 0.3
+      use_dora: true
+      bias: none
+      task_type: CAUSAL_LM
+      use_rslora: true
+  pipeline:
+    wandb: true
+    debug: false
+  dataset:
+    dataset_path: data/test
+    num_workers: 10
+    prefetch_factor: 20
+  optimization:
+    epochs: 2
+    lr: 0.0003
+    batch_size: 4
+    optimizer_type: default
+    accumulation_steps: 4
+    gradient_clip_val: 1.0
+    train_language_start_epoch: 1
+  resume: null
+model_path: /home/yck/cv/final/outputs/NoLora_UseProccessed_3Enc/1223_043535/checkpoint/0/mp_rank_00_model_states.pt

@@ -3,25 +3,27 @@ run_name: null
 seed: 42
 local_rank: -1
 liger_kernel: true
-resume: "outputs/DINO_r256_epoch_1_1_1216_134636/checkpoint/latest.pt"
 model:
   device: cuda
   model_id: llava-hf/llava-1.5-7b-hf
   encoder_id: facebook/dinov2-large
+  only_clip: true
+  use_clip: true
+  interpolation_mode: bilinear
   share_vit: false
-  use_depth: true
+  use_processed: false
+  use_depth: false
   depth_model_id: depth-anything/Depth-Anything-V2-Small-hf
-  use_segmentation: true
+  use_segmentation: false
   segmentation_model_id: shi-labs/oneformer_ade20k_dinat_large
   fuser_id: gemini
-  conditional_fuser: true
+  conditional_fuser: false
   condition_dropout: 0.3
   no_lora_but_FF_prefix:
   - multi_modal_projector
   - fuser
   - vision_tower.AdaLNZero
   - auxiliary_projectors
-  patch_size: 14
   vision_feature_select_strategy: full
   gradient_checkpointing: true
   lora_config:
@@ -43,7 +45,6 @@ pipeline:
   debug: false
 dataset:
   dataset_path: data
-  # seed: 42
   num_workers: 10
   prefetch_factor: 2
 optimization:
@@ -54,3 +55,4 @@ optimization:
   accumulation_steps: 4
   gradient_clip_val: 1.0
   train_language_start_epoch: 1
+resume: null

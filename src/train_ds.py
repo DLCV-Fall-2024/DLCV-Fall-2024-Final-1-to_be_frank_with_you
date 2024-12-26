@@ -1,15 +1,18 @@
-from typing import Any, Tuple
+import argparse
 import os
 import sys
-import argparse
+from typing import Any, Tuple
 
+import torch
+
+torch.multiprocessing.set_sharing_strategy("file_system")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 def main():
     # Load configuration from preset and CLI arguments
-    from src.utils.experiment import load_config
     from src.arguments.deepspeed import Config
+    from src.utils.experiment import load_config
 
     # Argument parsing
     parser = argparse.ArgumentParser(description="DeepSpeed Training Script")
@@ -26,7 +29,9 @@ def main():
     name = args.name
     local_rank = args.local_rank
 
-    dist.init_process_group()
+    from datetime import timedelta
+
+    dist.init_process_group(timeout=timedelta(seconds=60 * 2))
     world_size = dist.get_world_size()
 
     accelerator = deepspeed.get_accelerator()
@@ -48,19 +53,18 @@ def main():
 
     import warnings
     from pathlib import Path
-    from tqdm import tqdm
 
-    import torch
+    # import torch
     from liger_kernel.transformers import apply_liger_kernel_to_llama
     from pytorch_lightning import seed_everything
-    from torch.utils.data import DataLoader
-    from torch.utils.data import DistributedSampler
+    from torch.utils.data import DataLoader, DistributedSampler
+    from tqdm import tqdm
 
     from src.models.llava import LlavaPEFT, collate_fn
-    from src.utils.experiment import dump_config
     from src.utils import container_to, default
     from src.utils.dataset import DiscDataset
-    from src.utils.log import PerformanceMonitor, Timer, Profiler, print_once
+    from src.utils.experiment import dump_config
+    from src.utils.log import PerformanceMonitor, Profiler, Timer, print_once
 
     addition_config = {}
     mp = config.model
@@ -72,17 +76,21 @@ def main():
     if config.liger_kernel:
         apply_liger_kernel_to_llama()
 
-    model = LlavaPEFT(
-        model_params=mp,
-        gradient_checkpointing=True,
-        lora_config=mp.lora_config,
-        torch_dtype=torch.bfloat16,
-    )
+    with Profiler(profile=config.profile) as PROFILER:
+        model = LlavaPEFT(
+            model_params=mp,
+            gradient_checkpointing=True,
+            lora_config=mp.lora_config,
+            torch_dtype=torch.bfloat16,
+        )
+
+        PROFILER.export(output_dir / "model_init_trace.json")
+
     # TODO: Use zero3's reduction instead
     dsp.config.pop("zero_optimization")
 
     model_struct = {"model_struct": model.get_model_struct()}
-    
+
     dump_config(config, output_dir / "config.yaml")
     dump_config(model_struct, output_dir / "model_struct.yaml")
 
@@ -129,28 +137,28 @@ def main():
         collate_fn=collate_fn,
     )
 
-    val_dataset = DiscDataset(
-        val_set,
-        transform=transform,
-        train=True,
-        use_processed=mp.use_processed,
-        depth_model_id=mp.depth_model_id,
-        segmentation_model_id=mp.segmentation_model_id,
-    )
-    val_sampler = DistributedSampler(
-        val_dataset,
-        num_replicas=world_size,
-        rank=local_rank,
-        shuffle=False,
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=dsp.batch_size,
-        prefetch_factor=prefetch_factor,
-        num_workers=num_workers,
-        sampler=val_sampler,
-        collate_fn=collate_fn,
-    )
+    # val_dataset = DiscDataset(
+    #     val_set,
+    #     transform=transform,
+    #     train=True,
+    #     use_processed=mp.use_processed,
+    #     depth_model_id=mp.depth_model_id,
+    #     segmentation_model_id=mp.segmentation_model_id,
+    # )
+    # val_sampler = DistributedSampler(
+    #     val_dataset,
+    #     num_replicas=world_size,
+    #     rank=local_rank,
+    #     shuffle=False,
+    # )
+    # val_loader = DataLoader(
+    #     val_dataset,
+    #     batch_size=dsp.batch_size,
+    #     prefetch_factor=prefetch_factor,
+    #     num_workers=num_workers,
+    #     sampler=val_sampler,
+    #     collate_fn=collate_fn,
+    # )
 
     ######################### Logging ########################
 
@@ -170,7 +178,7 @@ def main():
     # logger = init_logger(local_rank=local_rank)
     # print(type(logger))
 
-    timer = Timer(30 * 60)  # 30 minutes
+    timer = Timer(10 * 60)  # 30 minutes
     DEBUG = PerformanceMonitor(config.debug)
     global_step = 0
 
@@ -226,6 +234,19 @@ def main():
         return model_engine, scheduler
 
     model.finetune_language(config.finetune_language)
+    model_engine, scheduler = initialize_model(model)
+
+    if config.resume:
+        print(f"Loading checkpoint from {config.resume}")
+        resume_dir = str(Path(config.resume) / "checkpoint")
+        model_engine.load_checkpoint(
+            resume_dir,
+            tag=config.resume_tag,
+            load_module_strict=False,
+            load_module_only=True,
+        )
+
+    model.setup_requires_grad()
     trainable_params = {
         "tranable_params": [
             name for name, param in model.named_parameters() if param.requires_grad
@@ -233,16 +254,7 @@ def main():
     }
     dump_config(trainable_params, output_dir / "trainable_params.yaml")
 
-    model_engine, scheduler = initialize_model(model)
-
-    if config.resume:
-        print(f"Loading checkpoint from {config.resume}")
-        model_engine.load_checkpoint(
-            config.resume,
-            tag=config.resume_tag,
-            load_module_strict=False,
-            load_module_only=True,
-        )
+    model_engine.save_checkpoint(checkpoint_dir, exclude_frozen_parameters=True)
 
     with Profiler(profile=config.profile) as PROFILER:
         for epoch in range(dsp.epochs):
@@ -252,6 +264,11 @@ def main():
             train_bar.set_description(f"[Train {epoch}/{dsp.epochs}]")
             for ids, batch in train_bar:
                 with DEBUG:
+                    if global_step == 1:
+                        model_engine.save_checkpoint(
+                            checkpoint_dir, exclude_frozen_parameters=True
+                        )
+
                     # `batch` is a nested dict with keys: `pixel_values`, `aux_inputs`, `input_ids`, `attention_mask`
                     # `aux_inputs` is a list of nested dict
                     target_dtypes = [torch.float16, torch.float32, torch.float64]
@@ -308,52 +325,50 @@ def main():
                     DEBUG.log_performance(log_per=20)
                     del outputs, loss, labels
 
-                    dist.barrier()
                     if timer.timesup():
                         model_engine.save_checkpoint(
                             checkpoint_dir, exclude_frozen_parameters=True
                         )
                         timer.reset()
 
-            model_engine.eval()
+            # model_engine.eval()
 
-            val_bar = tqdm(val_loader)
-            val_bar.set_description(f"[Val {epoch}/{dsp.epochs}]")
-            # NOTE: Disabled since it requires re-initializing the model_engine
-            # model.merge_adapter()
-            with torch.no_grad():
-                for ids, batch in val_bar:
-                    with DEBUG:
-                        # `batch` is a nested dict with keys: `pixel_values`, `aux_inputs`, `input_ids`, `attention_mask`
-                        # `aux_inputs` is a list of nested dict
-                        target_dtypes = [torch.float16, torch.float32, torch.float64]
-                        inputs = container_to(
-                            batch, target_dtypes, device=device, dtype=torch.bfloat16
-                        )
-                        # `input_ids` and `attention_mask` should be long tensors
-                        inputs["input_ids"] = inputs["input_ids"].to(torch.long)
-                        inputs["attention_mask"] = inputs["attention_mask"].to(
-                            torch.long
-                        )
-                        labels = inputs["input_ids"].clone()
+            # val_bar = tqdm(val_loader)
+            # val_bar.set_description(f"[Val {epoch}/{dsp.epochs}]")
+            # # NOTE: Disabled since it requires re-initializing the model_engine
+            # # model.merge_adapter()
+            # with torch.no_grad():
+            #     for ids, batch in val_bar:
+            #         with DEBUG:
+            #             # `batch` is a nested dict with keys: `pixel_values`, `aux_inputs`, `input_ids`, `attention_mask`
+            #             # `aux_inputs` is a list of nested dict
+            #             target_dtypes = [torch.float16, torch.float32, torch.float64]
+            #             inputs = container_to(
+            #                 batch, target_dtypes, device=device, dtype=torch.bfloat16
+            #             )
+            #             # `input_ids` and `attention_mask` should be long tensors
+            #             inputs["input_ids"] = inputs["input_ids"].to(torch.long)
+            #             inputs["attention_mask"] = inputs["attention_mask"].to(
+            #                 torch.long
+            #             )
+            #             labels = inputs["input_ids"].clone()
 
-                        DEBUG.stamp()
-                        DEBUG.set_params(**{"labels": labels})
+            #             DEBUG.stamp()
+            #             DEBUG.set_params(**{"labels": labels})
 
-                        outputs = model_engine.forward(
-                            **inputs,
-                            labels=labels,
-                            vision_feature_select_strategy=mp.vision_feature_select_strategy,
-                        )
-                        loss = outputs.loss
+            #             outputs = model_engine.forward(
+            #                 **inputs,
+            #                 labels=labels,
+            #                 vision_feature_select_strategy=mp.vision_feature_select_strategy,
+            #             )
+            #             loss = outputs.loss
 
-                        # logger({"val/loss": loss.item()})
+            #             # logger({"val/loss": loss.item()})
 
-                        DEBUG.stamp()
-                        DEBUG.log_performance(log_per=20)
-                        del outputs, loss, labels
+            #             DEBUG.stamp()
+            #             DEBUG.log_performance(log_per=20)
+            #             del outputs, loss, labels
 
-            dist.barrier()
             model_engine.save_checkpoint(
                 checkpoint_dir, tag=f"{epoch}", exclude_frozen_parameters=True
             )
