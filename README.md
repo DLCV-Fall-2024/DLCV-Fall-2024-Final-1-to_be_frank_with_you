@@ -47,12 +47,13 @@ python -m tools.obj_info --dataset_path <dataset_path>
 4. Prepare Parsed RAG data
 
 ```bash
-python -m src.inference_first_stage --name inference_first_stage
+python -m src.inference_first_stage --name <inference_first_stage | inference_first_stage_val |inference_first_stage_test> 
 ```
+Since this takes a long time, you can only run with `inference_first_stage_test` and run others to generate only some samples. Then, use 
 
-4. Download weights and configuration files
+5. Download weights and configuration files
 
-Download all from [submission](https://drive.google.com/drive/folders/1JJZPnBtFHGs56IBBt5X6baq0r8bfcPAj?usp=sharing) by running:
+Download all from [submission](https://drive.google.com/file/d/1h4k-OFJqWYqNaNE7eWNYCPTCU1l4DwLO/view?usp=sharing) and unzip or running:
 
 ```bash
 bash download_submission.sh
@@ -73,7 +74,7 @@ submission/
 python -m src.inference --name submission --training_dir submission --ckpt_path latest.pt
 ```
 
-The results should be in `outputs/inference/<TODO>/<LAST_TIMESTAMP>/submission.json
+The results should be in `outputs/inference/submission/<LAST_TIMESTAMP>/submission.json
 
 # Usage
 To start working on this final project, you should clone this repository into your local machine by the following command:

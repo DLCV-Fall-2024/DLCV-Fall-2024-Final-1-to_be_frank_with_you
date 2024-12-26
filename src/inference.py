@@ -197,12 +197,13 @@ def main():
     print()
     # Perform inference
 
-    out_path = (
-        output_dir.parent
-        / f"{training_dir.parent.name}_{training_dir.name}"
-        / str(args.slice)
-        / "submission.json"
-    )
+    # out_path = (
+    #     output_dir.parent
+    #     / f"{training_dir.parent.name}_{training_dir.name}"
+    #     / str(args.slice)
+    #     / "submission.json"
+    # )
+    out_path = output_dir / "submission.json"
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     print(f"Saving output to {out_path}")

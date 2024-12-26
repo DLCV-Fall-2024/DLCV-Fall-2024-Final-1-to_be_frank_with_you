@@ -152,21 +152,6 @@ if __name__ == "__main__":
     import json
     import pickle
 
-    pairs = {
-        "test": {
-            "config_path": "data/test/config.json",
-            "obj_info_path": "outputs/inference/inference_first_stage/1224_222940/first_stage.json",
-        },
-        "train": {
-            "config_path": "data/train/config.json",
-            "obj_info_path": "data/train/obj_info.pkl",
-        },
-        "val": {
-            "config_path": "data/val/config.json",
-            "obj_info_path": "data/val/obj_info.pkl",
-        },
-    }
-
     task = "train"
     config_path = f"data/{task}/config.json"
     store_path = f"data/{task}/config_aug.json"
